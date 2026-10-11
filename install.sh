@@ -39,8 +39,18 @@ apt-get install -y -qq fonts-vazirmatn fonts-noto-core fonts-dejavu-core fonts-f
 INSTALL_DIR="/opt/cryptochart"
 echo "==> copying files to $INSTALL_DIR ..."
 mkdir -p "$INSTALL_DIR"
+# حیاتی: updater.py هم باید کپی شود — آپدیت آنلاین ماژول (check/install از وب‌اپ) بدون آن کار نمی‌کند
 cp chart.py main.py mini_chart.py wifi.py market.py updater.py "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/main.py"
+
+# نسخهٔ نصب‌شده — در نصب کپی‌شده (بدون git) منبع git_rev() همین فایل است
+# و وب‌اپ از آن به عنوان «Module version» نمایش می‌دهد
+GIT_REV="$(git rev-parse --short HEAD 2>/dev/null || true)"
+if [ -n "$GIT_REV" ]; then
+  echo "$GIT_REV" > "$INSTALL_DIR/VERSION"
+else
+  echo $(date +%s) > "$INSTALL_DIR/VERSION"   # fallback: زمان نصب به‌عنوان شناسهٔ نسخه
+fi
 
 # اجرای سرویس با کاربر غیر root؛ دسترسی فریم‌بافر از طریق گروه video
 # کاربر اجرای سرویس: DietPi → dietpi ، Raspberry Pi OS → pi

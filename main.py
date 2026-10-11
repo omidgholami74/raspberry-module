@@ -24,8 +24,9 @@ import urllib.request
 
 from chart import ChartRenderer, Screen
 from market import MarketFeed
-from updater import check as update_check, install as update_install, git_rev, UpdateReporter
 from wifi import scan as wifi_scan, current as wifi_current, connect as wifi_connect, WifiReporter
+import updater
+from updater import UpdateReporter
 
 USER_AGENT = 'CryptoChart-Pi/1.0'
 POLL_WAIT = 45          # سرور تا ۱۵ ثانیه نگه می‌دارد + زمان دریافت فید؛ حاشیهٔ امن
@@ -119,39 +120,6 @@ def handle_wifi_cmd(cmd, reporter):
                         error='' if ok else info)
 
 
-def handle_update_cmd(cmd, reporter, update_reporter):
-    """اجرای فرمان به‌روزرسانی آنلاین (check/install) و گزارش نتیجه.
-    install فقط وقتی ری‌استارت می‌شود که pull واقعاً نسخهٔ تازه آورده باشد؛
-    ری‌استارت با systemctl (سرویس خودش را restart می‌کند) انجام می‌شود."""
-    action = cmd.get('cmd')
-    log(f'update command: {action}')
-    if action == 'check':
-        res = update_check() or {}
-        update_reporter.report(status=res.get('status', 'error'),
-                               message=res.get('message', ''), rev=res.get('rev', ''))
-        log(f'update check: {res.get("status")} — {res.get("message", "")[:120]}')
-    elif action == 'install':
-        res = update_install() or {}
-        update_reporter.report(status=res.get('status', 'error'),
-                               message=res.get('message', ''), rev=res.get('rev', ''))
-        log(f'update install: {res.get("status")} — {res.get("message", "")[:120]}')
-        if res.get('status') == 'installed':
-            time.sleep(2)   # فرصت برای رسیدن گزارش به سرور
-            log('restarting service for update...')
-            code, out = _run_systemctl_restart()
-            log(f'systemctl restart: rc={code} {out.strip()[:80]}')
-
-
-def _run_systemctl_restart():
-    try:
-        import subprocess
-        p = subprocess.run(['systemctl', 'restart', 'cryptochart'], timeout=30,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        return p.returncode, (p.stdout or b'').decode('utf-8', 'replace')
-    except Exception as e:
-        return 1, str(e)[:120]
-
-
 NET_ERRORS = (urllib.error.URLError, OSError, TimeoutError, ConnectionError)
 
 
@@ -202,6 +170,7 @@ def main():
     update_reporter = UpdateReporter(args.url)
     market = MarketFeed()   # همهٔ دادهٔ بازار مستقیم از ماژول (نوبیتکس/برس‌آپ)
     last_source = ''
+    _last_update_ts = 0.0   # last handled updateCmd ts — هر فرمان فقط بار اجرا شود
 
     # ---------- راه‌اندازی صفحه ----------
     try:
@@ -286,11 +255,9 @@ def main():
                         continue
                     psym, piv = key.split(':', 1)
                     # بازهٔ تاریخی و بازهٔ قیمتی هر پنل مستقل است
-                    # بودجهٔ کندل پنل = همان limit سراسری با سقف قابل‌رندر در پنل
-                    # (۴۰۰ کندل — بیشتر از این در عرض ۲۳۷px پنل بی‌معنی است)
                     pf_from = int(pf.get('rangeFrom') or 0)
                     pf_to = int(pf.get('rangeTo') or 0)
-                    nc, _src = unpack_feed(market.feed(psym, piv, min(400, limit),
+                    nc, _src = unpack_feed(market.feed(psym, piv, min(60, limit),
                                                        pf_from, pf_to))
                     if nc is not None:
                         pf['candles'] = nc
@@ -316,18 +283,28 @@ def main():
                     except Exception:
                         pass
 
-            # فرمان به‌روزرسانی آنلاین در انتظار؟ (فایل فرمان یک‌بارمصرف است)
+            # فرمان آپدیت (check/install از وب‌اپ) — هر ts فقط یک بار اجرا می‌شود
             ucmd = data.get('updateCmd') or {}
-            if ucmd.get('cmd'):
+            uts = float(ucmd.get('ts') or 0)
+            if ucmd.get('cmd') and uts > _last_update_ts and (time.time() - uts) < 120:
+                _last_update_ts = uts
+                act = str(ucmd.get('cmd'))
+                log(f'update command: {act}')
                 try:
-                    handle_update_cmd(ucmd, wifi_reporter, update_reporter)
+                    _ran, res = updater.run_cmd(ucmd, update_reporter)
+                    log(f'update {act}: {(res or {}).get("status")} — {(res or {}).get("message", "")[:120]}')
                 except Exception as e:
                     log(f'update error: {e}')
                     try:
-                        update_reporter.report(status='error', message=f'{type(e).__name__}: {e}'[:280],
-                                               rev=git_rev())
+                        update_reporter.report(status='error', message=f'{type(e).__name__}: {e}'[:300],
+                                               rev=updater.git_rev())
                     except Exception:
                         pass
+                if act == 'install':
+                    # install.sh سرویس را ری‌استارت می‌کند؛ اگر به اینجا رسیدیم
+                    # یعنی ری‌استارت انجام نشده — خودمان خارج می‌شویم تا systemd بکشد بالا
+                    log('update install done — exiting for service restart')
+                    break
 
             # فاصلهٔ کوتاه بین دو poll — مصرف CPU نزدیک صفر
             for _ in range(2):

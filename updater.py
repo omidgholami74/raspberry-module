@@ -16,6 +16,7 @@ report   → نتیجه به سرور گزارش می‌شود (UpdateReporter)
 import json
 import os
 import subprocess
+import time
 import urllib.request
 
 PI_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -137,3 +138,39 @@ class UpdateReporter:
                 return json.loads(r.read().decode('utf-8'))
         except Exception:
             return None
+
+
+def run_cmd(cmd, reporter, age_s=120):
+    """اجرای فرمان آپدیت دریافتی از poll سرور:
+    poll → {'updateCmd': {'cmd': 'check'|'install', 'ts': ...}}
+    هر فرمان فقط یک بار اجرا می‌شود (فققط اگر ts جدید باشد) و نتیجه
+    بلافاصله با UpdateReporter به سرور گزارش می‌شود.
+    خروجی: (cmd_that_ran_or_None, result_dict)
+    """
+    action = str((cmd or {}).get('cmd') or '').strip()
+    ts = float((cmd or {}).get('ts') or 0)
+    if not action or action not in ('check', 'install') or not ts:
+        return None, None
+    if ts < (time.time() - age_s):
+        return None, None   # فرمان قدیمی — نادیده بگیر
+    run = check if action == 'check' else install
+    try:
+        res = run()
+    except Exception as e:
+        res = dict(status='error', message=f'{type(e).__name__}: {e}'[:300], rev=git_rev())
+    try:
+        reporter.report(status=res.get('status', ''), message=res.get('message', ''),
+                        rev=res.get('rev', ''))
+    except Exception:
+        pass
+    return action, res
+
+
+def _selftest():
+    """خودآزمایی: check() بدون هیچ تغییری باید اجرا و dict بدهد."""
+    import pprint
+    pprint.pprint(check())
+
+
+if __name__ == '__main__':
+    _selftest()  # اگر به‌روزرسانی آنلاین فرق کرد، اینجا می‌بینی
