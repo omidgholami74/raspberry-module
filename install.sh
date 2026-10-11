@@ -39,7 +39,7 @@ apt-get install -y -qq fonts-vazirmatn fonts-noto-core fonts-dejavu-core fonts-f
 INSTALL_DIR="/opt/cryptochart"
 echo "==> copying files to $INSTALL_DIR ..."
 mkdir -p "$INSTALL_DIR"
-cp chart.py main.py mini_chart.py wifi.py market.py "$INSTALL_DIR/"
+cp chart.py main.py mini_chart.py wifi.py market.py updater.py "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/main.py"
 
 # اجرای سرویس با کاربر غیر root؛ دسترسی فریم‌بافر از طریق گروه video
