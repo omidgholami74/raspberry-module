@@ -193,6 +193,19 @@ def scale(v, pct):
         return 1.0
 
 
+# ---------------- فاصلهٔ نمودار از محور Y ----------------
+# کندل/شبکه/خطوط کاربر کمی پیش از محور قیمت (راست) تمام می‌شوند: هم چشم بهتر
+# است و هم خط رسم‌شده «تا آخر» و روی خودِ محور نمی‌رود. نسبی است تا روی پنل‌های
+# کوچک چندچارت هم اندازهٔ معقولی داشته باشد.
+AXIS_GAP_FRAC = 0.015
+AXIS_GAP_MIN = 4
+
+
+def axis_gap(w):
+    """فاصلهٔ راستِ ناحیهٔ رسم از محور قیمت برای پهنای w (پیکسل)."""
+    return max(AXIS_GAP_MIN, int(round(w * AXIS_GAP_FRAC)))
+
+
 # ---------------- سه Moving Average (MA) — جایگزین EMA/بولینگر ----------------
 # سه MA با دوره‌های جدا که کاربر از وب‌اپ وارد می‌کند؛ رنگ‌ها متمایزند.
 MA_SPECS = (('ma1', 20), ('ma2', 50), ('ma3', 200))          # (id, دورهٔ پیش‌فرض)
@@ -647,6 +660,7 @@ class ChartRenderer:
         x0, y0, x1, y1 = rect
         axw = self._axis_w
         px0, px1 = x0, x1 - axw              # ناحیهٔ رسم قیمت
+        cx1 = px1 - axis_gap(x1 - x0)        # نمودار با کمی فاصله از محور Y تمام می‌شود
         self.d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=t['bg'])
 
         if len(candles) < 2:
@@ -688,7 +702,7 @@ class ChartRenderer:
             return y_bot - (v - lo) / (hi - lo) * ph
 
         n = len(candles)
-        slot = (px1 - px0) / n
+        slot = (cx1 - px0) / n
         bw = max(1, min(int(slot * 0.62), 22))
         cx0 = px0 + slot / 2
 
@@ -698,7 +712,7 @@ class ChartRenderer:
         f_lab = self.fonts.get(ax_size)
         for i in range(1, 5):
             gy = y0 + ph * i / 5
-            self._dashed_h(int(gy), px0, px1, t['grid'])
+            self._dashed_h(int(gy), px0, cx1, t['grid'])
             self._text((x1 - axw + 6, gy), fmt_axis(hi - (hi - lo) * i / 5), ax_size, t['grid_txt'], anchor='lm')
 
         # ابزار بازهٔ قیمتی — فیل پشت کندل‌ها کشیده می‌شود تا نمودار زیر آن
@@ -724,7 +738,7 @@ class ChartRenderer:
         if not fills and marks and len(marks) == 2 and marks[0] != marks[1]:
             fills.append((_clip(Y(max(marks))), _clip(Y(min(marks))), acc))
         for ya_f, yb_f, col_f in fills:
-            self.d.rectangle([px0, ya_f, px1 - 1, max(yb_f, ya_f)],
+            self.d.rectangle([px0, ya_f, cx1 - 1, max(yb_f, ya_f)],
                              fill=_mix(t['bg'], col_f, range_alpha))
 
         # نوع چارت — حالت کندل: solid/hollow/border روی نوع candles اعمال می‌شود
@@ -761,12 +775,12 @@ class ChartRenderer:
             self._polyline(pts, t['line'], 2)
         elif chart_type == 'area':
             pts = [(int(cx0 + i * slot), Y(c)) for i, c in enumerate(closes)]
-            poly = [(px0, y_bot)] + pts + [(px1 - 1, y_bot)]
+            poly = [(px0, y_bot)] + pts + [(cx1 - 1, y_bot)]
             base = t['line']
             for yy in range(y0, y_bot):  # گرادیان عمودی سبک
                 k = (yy - y0) / max(1, ph)
                 col = tuple(int(base[c2] * (0.38 - 0.30 * k) + t['bg'][c2] * (0.62 + 0.30 * k)) for c2 in range(3))
-                self.d.line([(px0, yy), (px1 - 1, yy)], fill=col)
+                self.d.line([(px0, yy), (cx1 - 1, yy)], fill=col)
             self.d.polygon(poly, fill=None)
             self._polyline(pts, base, 2)
 
@@ -784,10 +798,10 @@ class ChartRenderer:
             if len(vals_m) == 2 and vals_m[0] != vals_m[1]:
                 ya, yb = _clip(Y(vals_m[-1])), _clip(Y(vals_m[0]))
                 for yy in (ya, yb):
-                    self._dashed_h(yy, px0, px1, mc, 3, 4)
+                    self._dashed_h(yy, px0, cx1, mc, 3, 4)
             else:
                 yy = _clip(Y(vals_m[0]))
-                self._dashed_h(yy, px0, px1, mc, 4, 4)
+                self._dashed_h(yy, px0, cx1, mc, 4, 4)
                 tag = fmt_price(vals_m[0])
                 tw = int(self.d.textlength(tag, font=f_lab)) + 8
                 if tw <= axw:
@@ -801,10 +815,10 @@ class ChartRenderer:
             if len(marks) == 2 and marks[0] != marks[1]:
                 ya, yb = _clip(Y(max(marks))), _clip(Y(min(marks)))
                 for yy in (ya, yb):
-                    self._dashed_h(yy, px0, px1, acc, 3, 4)
+                    self._dashed_h(yy, px0, cx1, acc, 3, 4)
             else:
                 yy = _clip(Y(marks[0]))
-                self._dashed_h(yy, px0, px1, acc, 4, 4)
+                self._dashed_h(yy, px0, cx1, acc, 4, 4)
                 tag = fmt_price(marks[0])
                 tw = int(self.d.textlength(tag, font=f_lab)) + 8
                 if tw <= axw:
@@ -840,7 +854,7 @@ class ChartRenderer:
                         yy = int(max(y0, min(Y(pv), y_bot)))
                 if yy is None:
                     yy = int(y0 + fy * (y_bot - y0))
-                pts.append((int(px0 + fx * (px1 - 1 - px0)), yy))
+                pts.append((int(px0 + fx * (cx1 - 1 - px0)), yy))
             if len(pts) >= 2:
                 self._polyline(pts, lcol, 2)
                 if len(pts) == 2:
@@ -857,7 +871,7 @@ class ChartRenderer:
         if last_price and last_price > 0:
             ly = int(max(y0 + 9, min(Y(last_price), y_bot - 9)))
             col = t['up'] if last_price - (prev_close or last_price) >= 0 else t['down']
-            self._dashed_h(ly, px0, px1, col, 2, 5)
+            self._dashed_h(ly, px0, cx1, col, 2, 5)
             tag = fmt_price(last_price)
             ts = 11
             ft = self.fonts.get(ts, True)
@@ -875,9 +889,9 @@ class ChartRenderer:
             step = (candles[1]['t'] - candles[0]['t']) if len(candles) > 1 else 0
             # تایم‌فریم ساعتی و بالاتر (یا بازه‌ی ≥۱ روز) → تاریخ؛ ریزتر → ساعت
             show_date = span >= 86400 or step >= 3600
-            n = max(2, min(6, int((px1 - px0) // 95)))
+            n = max(2, min(6, int((cx1 - px0) // 95)))
             self.d.rectangle([px0, y_bot, px1 - 1, y1 - 1], fill=t['bg'])
-            self.d.line([(px0, y_bot), (px1 - 1, y_bot)], fill=t['sep'])
+            self.d.line([(px0, y_bot), (cx1, y_bot)], fill=t['sep'])
             fs = getattr(self, '_fs', {}) or {}
             f_ax = self.fonts.get(max(7, int(9 * scale(None, fs.get('date', 100)))))
             for k in range(n):
@@ -892,7 +906,7 @@ class ChartRenderer:
                         lab = f'{jy}/{jm:02d}/{jd:02d}'
                 else:
                     lab = time.strftime('%H:%M', time.localtime(tt))
-                lx = int(px0 + (px1 - px0) * (k + 0.5) / n)
+                lx = int(px0 + (cx1 - px0) * (k + 0.5) / n)
                 self.d.text((lx, y_bot + date_h / 2), lab, font=f_ax,
                             fill=t['grid_txt'], anchor='mm')
 
@@ -906,12 +920,13 @@ class ChartRenderer:
         x0, y0, x1, y1 = rect
         axw = self._axis_w
         px1 = x1 - axw
+        cx1 = px1 - axis_gap(x1 - x0)        # فاصله از محور Y (مثل پنل قیمت)
         self.d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=t['panel'])
         if not candles:
             self._mark(rect); return
         mx = max(c['v'] for c in candles) or 1.0
         n = len(candles)
-        slot = (px1 - x0) / n
+        slot = (cx1 - x0) / n
         bw = max(1, min(int(slot * 0.62), 22))
         for i, c in enumerate(candles):
             x = int(x0 + slot / 2 + i * slot)
@@ -931,6 +946,7 @@ class ChartRenderer:
         x0, y0, x1, y1 = rect
         axw = self._axis_w
         px1 = x1 - axw
+        cx1 = px1 - axis_gap(x1 - x0)        # فاصله از محور Y (مثل پنل قیمت)
         self.d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=t['panel'])
         ph = y1 - y0
 
@@ -943,11 +959,11 @@ class ChartRenderer:
         rp = max(2, int((params or {}).get('period') or 14))
         vals = rsi_series([c['c'] for c in candles], rp)
         # سایهٔ ملایم نواحی اشباع خرید/فروش
-        self.d.rectangle([x0, y0, px1 - 1, int(Y(70))], fill=mix(t['panel'], t['down'], 0.10))
-        self.d.rectangle([x0, int(Y(30)), px1 - 1, y1 - 1], fill=mix(t['panel'], t['up'], 0.10))
+        self.d.rectangle([x0, y0, cx1 - 1, int(Y(70))], fill=mix(t['panel'], t['down'], 0.10))
+        self.d.rectangle([x0, int(Y(30)), cx1 - 1, y1 - 1], fill=mix(t['panel'], t['up'], 0.10))
         for lv in (30, 50, 70):
-            self._dashed_h(int(Y(lv)), x0, px1, t['grid'] if lv == 50 else t['sep'])
-        pts = [(int(x0 + (px1 - x0) * (i + 0.5) / len(vals)), Y(v)) for i, v in enumerate(vals) if v is not None]
+            self._dashed_h(int(Y(lv)), x0, cx1, t['grid'] if lv == 50 else t['sep'])
+        pts = [(int(x0 + (cx1 - x0) * (i + 0.5) / len(vals)), Y(v)) for i, v in enumerate(vals) if v is not None]
         if pts:
             self._polyline(pts, (170, 120, 255), 2)
             last = [v for v in vals if v is not None]
@@ -964,6 +980,7 @@ class ChartRenderer:
         x0, y0, x1, y1 = rect
         axw = self._axis_w
         px1 = x1 - axw
+        cx1 = px1 - axis_gap(x1 - x0)        # فاصله از محور Y (مثل پنل قیمت)
         self.d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=t['panel'])
         p = params or {}
         fast = max(2, int(p.get('fast') or 12))
@@ -977,7 +994,7 @@ class ChartRenderer:
         rng = (hi - lo) or 1e-9
         mid = y0 + int((hi / rng) * (y1 - y0))
         n = len(candles)
-        slot = (px1 - x0) / n
+        slot = (cx1 - x0) / n
         bw = max(1, min(int(slot * 0.5), 14))
         for i in range(n):
             if line[i] is None:
@@ -990,7 +1007,7 @@ class ChartRenderer:
             pts = [(int(x0 + slot / 2 + i * slot), y0 + int(((hi - v) / rng) * (y1 - y0)))
                    for i, v in enumerate(series) if v is not None]
             self._polyline(pts, col, w)
-        self.d.line([(x0, mid), (px1, mid)], fill=t['grid'])
+        self.d.line([(x0, mid), (cx1, mid)], fill=t['grid'])
         self._text((x0 + 4, y0 + 2), f'MACD {fast}/{slow}/{sig}', 9, t['grid_txt'])
         self.d.line([(x0, y0), (x1 - 1, y0)], fill=t['sep'])
         self.d.line([(px1, y0), (px1, y1 - 1)], fill=t['sep'])

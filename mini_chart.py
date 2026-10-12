@@ -28,7 +28,7 @@ class MiniChart:
         x0, y0, x1, y1 = rect
         pad = 6
         # ایمپورت تنبل (مانند fmt_price) تا حلقهٔ ایمپورت ایجاد نشود
-        from chart import alert_phase, hex_to_rgb, scale
+        from chart import alert_phase, axis_gap, hex_to_rgb, scale
         fonts = fonts or {}
         pane_ind = pane_ind or {}
 
@@ -97,7 +97,9 @@ class MiniChart:
 
         # ناحیهٔ رسم + خط بازهٔ هدف (با فونت بزرگ درصد، پلات کمی پایین‌تر شروع می‌شود)
         gx0, gy0 = x0 + pad, y0 + head_h + max(26, chg_size + 16)
-        gx1, gy1 = x1 - pad - axw, y1 - pad - 4 - date_h
+        axx = x1 - pad - axw                 # شروع نوار محور Y (جداکننده همین‌جا)
+        # فاصلهٔ کوچک نمودار از محور Y — خطوط و کندل تا خودِ محور نمی‌روند
+        gx1, gy1 = axx - axis_gap(x1 - x0), y1 - pad - 4 - date_h
         gw, gh = gx1 - gx0, gy1 - gy0
         if gw < 20 or gh < 14:
             self.r._mark(rect)
@@ -107,9 +109,9 @@ class MiniChart:
         for i in range(1, 5):
             gy = gy0 + gh * i / 5
             self.r._dashed_h(int(gy), gx0, gx1, t['grid'])
-            self.r._text((gx1 + 4, gy), _fa(hi - (hi - lo) * i / 5),
+            self.r._text((axx + 4, gy), _fa(hi - (hi - lo) * i / 5),
                          pax_size, t['grid_txt'], anchor='lm')
-        self.r.d.line([(gx1, gy0), (gx1, gy1)], fill=t['sep'])
+        self.r.d.line([(axx, gy0), (axx, gy1)], fill=t['sep'])
 
         fg = None
         if alert:
