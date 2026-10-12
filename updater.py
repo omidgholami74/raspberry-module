@@ -59,17 +59,12 @@ def git_remote_rev():
 
 
 def _git_ready():
-    """مخزن git سالم و تمیز است؟ (خروجی: (bool, پیام خطا))"""
+    """مخزن git سالم است؟ — آپدیت آنلاین را تنها در صورت نبود مخزن git مسدود می‌کند.
+    (تغییرات محلی دیگر ممنوع نیستند: installer قبل از pull کپی می‌کند؛ pull fast-forward
+    تنها وقتی ممنوع است که با مخالفت واقعی مواجه شود که می‌تواند در install() کنترل شود.)"""
     code, _ = _run(['git', 'rev-parse', '--git-dir'], timeout=10)
     if code != 0:
         return False, 'نصب فعلی مخزن git نیست — برای آپدیت آنلاین یک بار با git clone نصب کنید'
-    # فقط تغییرات داخل پوشهٔ خود ماژول مهم است (بقیهٔ مخزن ربطی به ماژول ندارد)
-    code, out = _run(['git', 'status', '--porcelain', '--untracked-files=no', '--', '.'], timeout=15)
-    if code != 0:
-        return False, 'git status failed: ' + out.strip()[:120]
-    if out.strip():
-        # فایل‌های تغییر محلی — pull fast-forward ممکن است ناسازگار باشد
-        return False, 'ماژول تغییر محلی دارد؛ اول آن را ذخیره/برگردانید: ' + out.strip()[:120]
     return True, ''
 
 

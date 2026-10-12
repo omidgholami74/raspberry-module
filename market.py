@@ -346,17 +346,32 @@ class MarketFeed:
           * بی‌بازه → یک درخواست با countback=limit (تازه‌ترین N کندل)
           * بازهٔ تاریخی → رزولوشن متناسب + صفحه‌بندی (page) برای کندل‌های قدیمی‌تر
         """
-        res, res_sec = self._resolve(bucket)
         to = int(to_ts or time.time())
+
+        # 1W پشتیبانی UDF ندارد → از روزانهٔ نوبیتکس می‌سازیم (aggregate).
+        # مه: باکت هفتگی با floor(روز/604800) کلید می‌خورد؛ با دستکاری می‌یابیم:
+        # بازهٔ درخواستی ۲ روز بزرگ‌تر (چون باکت هفتگی از وسط هفته شروع می‌شود)
+        # تا aggregate() همان باکت‌های سوییچ (بدون open گم‌شده) را بسازد (مثل بک‌اند).
+        if bucket == 604800:
+            res, res_sec = 'D', 86400
+            if from_ts:
+                from_ts = (int(from_ts) // 604800) * 604800
+            else:
+                from_ts = (to // 604800 - max(1, limit) - 1) * 604800
+
+        if bucket != 604800:
+            res, res_sec = self._resolve(bucket)
 
         if from_ts:
             # نردبان رزولوشن بر اساس طول بازه: تا جایی که در بودجهٔ صفحه جا شود
-            span = max(1, to - from_ts)
-            idx = [s for s, _ in NOB_RESS].index(res_sec)
-            while span // res_sec > NOB_RANGE_MAX and idx + 1 < len(NOB_RESS):
-                idx += 1
-                res_sec = NOB_RESS[idx][0]
-                res = NOB_RESS[idx][1]
+            span = max(1, to - int(from_ts))
+            if bucket != 604800:
+                # نردبان رزولوشن فقط برای تایم‌فریم‌های عادی؛ 1W همیشه از روزانه می‌آید
+                idx = [s for s, _ in NOB_RESS].index(res_sec)
+                while span // res_sec > NOB_RANGE_MAX and idx + 1 < len(NOB_RESS):
+                    idx += 1
+                    res_sec = NOB_RESS[idx][0]
+                    res = NOB_RESS[idx][1]
             need = max(1, int(span // res_sec))
             pages = min(NOB_MAX_PAGES, max(1, -(-need // NOB_PAGE_MAX)))
             frm = int(from_ts)
