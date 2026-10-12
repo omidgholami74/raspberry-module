@@ -153,12 +153,15 @@ def branch_name():
 
 
 # ------------------------- شبکه -------------------------
-def _http_get(url, timeout=HTTP_TIMEOUT):
-    req = urllib.request.Request(url, headers={
+def _http_get(url, timeout=HTTP_TIMEOUT, token=''):
+    headers = {
         'User-Agent': UA,
         'Accept': 'application/vnd.github+json, application/octet-stream',
         'Connection': 'close',
-    })
+    }
+    if token:                       # مخزن خصوصی → با توکن، وگرنه 404 می‌دهد
+        headers['Authorization'] = 'Bearer ' + token
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -171,7 +174,7 @@ def remote_sha():
     if owner and name:
         url = f'{API_HOST}/repos/{owner}/{name}/commits/{urllib.parse.quote(branch)}'
         try:
-            j = json.loads(_http_get(url).decode('utf-8', 'replace'))
+            j = json.loads(_http_get(url, token=_repo_token()).decode('utf-8', 'replace'))
             sha = str((j or {}).get('sha') or '')
             if len(sha) >= 7:
                 return sha
@@ -271,47 +274,143 @@ def _refresh_service(env=None, timeout=180):
     return code == 0, out
 
 
-def _download_tree(sha):
-    """آرشیو همان commit را دانلود و باز می‌کند؛ خروجی: (پوشهٔ موقت، پوشهٔ pi/)
-    یا (None، پیام خطا)."""
+def _repo_token():
+    """توکن اختیاری مخزن خصوصی: فایل REPO_TOKEN کنار ماژول یا متغیر GITHUB_TOKEN.
+    بدون توکن همه‌چیز مثل قبل کار می‌کند (مخزن عمومی)."""
+    tok = _read(os.path.join(PI_DIR, 'REPO_TOKEN'), 200) or os.environ.get('GITHUB_TOKEN', '')
+    return tok.strip()
+
+
+def _archive_urls(sha):
+    """آدرس‌های آرشیو همان commit — codeload اول (سبک)، API به‌عنوان پشتیبان."""
     owner, name = _parse_repo(repo_url())
-    url = f'{ARCHIVE_HOST}/{owner}/{name}/tar.gz/{sha}'
-    tmp = tempfile.mkdtemp(prefix='cryptochart-upd-')
+    if not owner or not name:
+        return []
+    return [f'{ARCHIVE_HOST}/{owner}/{name}/tar.gz/{sha}',
+            f'{API_HOST}/repos/{owner}/{name}/tarball/{sha}']
+
+
+def _extract_tar(raw, tmp):
+    """آرشیو را در tmp باز می‌کند؛ خروجی: (تعداد فایل، پیام خطا).
+    فقط فایل‌های معمولی و مسیرهای سالم استخراج می‌شوند."""
+    tarpath = os.path.join(tmp, 'src.tar.gz')
+    with open(tarpath, 'wb') as f:
+        f.write(raw)
+    with tarfile.open(tarpath, 'r:gz') as tf:
+        members = []
+        for m in tf.getmembers():
+            if not m.isfile():
+                continue
+            name_m = m.name.replace('\\', '/')
+            if name_m.startswith('/') or '..' in name_m.split('/'):
+                continue
+            members.append(m)
+        if not members:
+            return 0, 'آرشیو هیچ فایلی نداشت'
+        tf.extractall(tmp, members=members)
+    return len(members), ''
+
+
+def _has_module_files(d):
+    return all(os.path.isfile(os.path.join(d, f)) for f in MODULE_FILES)
+
+
+def _describe_tree(tmp, limit=6):
+    """خلاصهٔ ساختار آرشیو برای پیام خطا (چه چیزی واقعاً دانلود شده؟)"""
     try:
-        raw = _http_get(url, timeout=120)
-        if len(raw) < 200:
-            return None, f'آرشیو خالی بود ({url})'
-        tarpath = os.path.join(tmp, 'src.tar.gz')
-        with open(tarpath, 'wb') as f:
-            f.write(raw)
-        with tarfile.open(tarpath, 'r:gz') as tf:
-            # فقط فایل‌های معمولی؛ جلوی مسیرهای عجیب گرفته می‌شود
-            members = []
-            for m in tf.getmembers():
-                if not m.isfile():
-                    continue
-                name_m = m.name.replace('\\', '/')
-                if name_m.startswith('/') or '..' in name_m.split('/'):
-                    continue
-                members.append(m)
-            tf.extractall(tmp, members=members)
-        roots = [os.path.join(tmp, x) for x in os.listdir(tmp)
-                 if os.path.isdir(os.path.join(tmp, x))]
-        root = ''
-        for r in roots:
-            if os.path.isdir(os.path.join(r, 'pi')):
-                root = r
-                break
-        if not root:
-            return None, 'در آرشیو پوشهٔ pi پیدا نشد'
-        src = os.path.join(root, 'pi')
-        missing = [f for f in MODULE_FILES if not os.path.isfile(os.path.join(src, f))]
-        if missing:
-            return None, 'فایل‌های لازم در آرشیو نیستند: ' + ','.join(missing[:4])
-        return tmp, src
+        items = sorted(os.listdir(tmp))
+    except OSError:
+        return 'ساختار آرشیو خوانده نشد'
+    items = [x for x in items if x != 'src.tar.gz']
+    shown = [x + '/' if os.path.isdir(os.path.join(tmp, x)) else x for x in items[:limit]]
+    return ', '.join(shown) + ('…' if len(items) > limit else '')
+
+
+def _find_module_dir(tmp):
+    """پوشهٔ ماژول داخل آرشیو بازشده — مستقل از ساختار آرشیو.
+    ترتیب: <ریشه>/pi (استاندارد گیت‌هاب) → هر پوشه‌ای تا عمق ۲ که همهٔ فایل‌های
+    ماژول را دارد (مونوریپو/پوشهٔ تودرتو) → خود ریشه (آرشیو تخت یا ./‌محور).
+    خروجی: (مسیر یا ''، توضیح ساختار برای پیام خطا)."""
+    tops = sorted(x for x in os.listdir(tmp)
+                  if os.path.isdir(os.path.join(tmp, x)))
+    for r in tops:
+        base = os.path.join(tmp, r)
+        cand = os.path.join(base, 'pi')
+        if os.path.isdir(cand) and _has_module_files(cand):
+            return cand, ''                       # <repo>-<sha>/pi
+        if _has_module_files(base):
+            return base, ''                       # module files at repo root
+                                                  # (e.g. raspberry-module)
+    for r in tops:                       # هر عمقی تا ۲ سطح زیر ریشه
+        base = os.path.join(tmp, r)
+        for cur, dirs, _files in os.walk(base):
+            depth = os.path.relpath(cur, base).count(os.sep)
+            if depth >= 2:
+                dirs[:] = []
+                continue
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            if cur != base and _has_module_files(cur):
+                return cur, ''
+    for cand in (tmp, os.path.join(tmp, 'pi')):    # آرشیو تخت (بدون پوشهٔ بالا)
+        if _has_module_files(cand):
+            return cand, ''
+    return '', _describe_tree(tmp)
+
+
+def _download_tree(sha):
+    """آرشیو همان commit را دانلود و باز می‌کند؛ خروجی: (پوشهٔ موقت، پوشهٔ ماژول)
+    یا (None، پیام خطا). ساختار آرشیو مهم نیست: پوشهٔ حاوی فایل‌های ماژول پیدا
+    می‌شود (استاندارد <repo>-<sha>/pi یا تودرتو یا تخت)."""
+    urls = _archive_urls(sha)
+    if not urls:
+        return None, ('آدرس مخزن نامعتبر است — فایل REPO_URL را با آدرس مخزن '
+                      'گیت‌هاب پر کنید یا یک بار با git clone نصب کنید')
+    token = _repo_token()
+    tmp = tempfile.mkdtemp(prefix='cryptochart-upd-')
+    errs = []
+    try:
+        for url in urls:
+            try:
+                raw = _http_get(url, timeout=120, token=token)
+            except urllib.error.HTTPError as e:
+                errs.append('%s → HTTP %s' % (url, e.code))
+                if e.code == 404 and not token:
+                    errs.append('(مخزن خصوصی است یا آدرسش اشتباه — برای مخزن '
+                                'خصوصی توکن را در فایل REPO_TOKEN بگذارید)')
+                continue
+            except Exception as e:
+                errs.append('%s → %s: %s' % (url, type(e).__name__, e))
+                continue
+            if len(raw) < 200:
+                errs.append('%s → پاسخ خالی (%d بایت)' % (url, len(raw)))
+                continue
+            try:
+                nfiles, err = _extract_tar(raw, tmp)
+            except Exception as e:
+                errs.append('%s → آرشیو باز نشد (%s)' % (url, type(e).__name__))
+                continue
+            if err:
+                errs.append('%s → %s' % (url, err))
+                continue
+            src, desc = _find_module_dir(tmp)
+            if src:
+                return tmp, src
+            errs.append('%s → پوشهٔ ماژول پیدا نشد؛ داخل آرشیو: %s (%d فایل)'
+                        % (url, desc or 'خالی', nfiles))
+            for x in os.listdir(tmp):        # پاک‌سازی برای تلاش بعدی
+                p = os.path.join(tmp, x)
+                if os.path.isdir(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+        msg = ' | '.join(errs)[:280] or 'آرشیو در دسترس نبود'
     except Exception as e:
-        shutil.rmtree(tmp, ignore_errors=True)
-        return None, f'{type(e).__name__}: {e}'[:160]
+        msg = '%s: %s' % (type(e).__name__, e)
+    shutil.rmtree(tmp, ignore_errors=True)
+    return None, msg
 
 
 def install():
