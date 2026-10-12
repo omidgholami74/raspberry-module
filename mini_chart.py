@@ -138,10 +138,15 @@ class MiniChart:
                 x = int(gx0 + i * slot + slot / 2)
                 col = t['up'] if c['c'] >= c['o'] else t['down']
                 d.line([(x, int(Y(c['h']))), (x, int(Y(c['l'])))], fill=col)
-                top, bot = int(Y(c['o'])), int(Y(c['c']))
+                # ترتیب مهم است: در تصویر، کندل صعودی (c >= o) بازهٔ y کوچکتری
+                # دارد؛ اگر پیش از بررسی «بدنهٔ نازک» min/max نکنیم، bot - top
+                # منفی می‌شود و بدنهٔ کندل‌های سبز به یک خط یک‌پیکسلی تا می‌خورد
+                # (LCD با ادیتور و حالت تکی یکی نمی‌شد).
+                yo, yc = int(Y(c['o'])), int(Y(c['c']))
+                top, bot = min(yo, yc), max(yo, yc)
                 if bot - top < 1:
                     bot = top + 1
-                d.rectangle([x - bw // 2, min(top, bot), x + bw // 2, max(top, bot)], fill=col)
+                d.rectangle([x - bw // 2, top, x + bw // 2, bot], fill=col)
         else:
             # line / area با فیل EMA سبک روی دیتای اصلی
             pts = [(int(gx0 + i * slot + slot / 2), Y(v)) for i, v in enumerate(closes)]

@@ -316,10 +316,13 @@ class MarketFeed:
         page>0 صفحهٔ کندل‌های قدیمی‌تر را می‌گیرد (تایم‌فریم عمیق).
         """
         q = {'symbol': market, 'resolution': res, 'to': int(to)}
-        if page > 0:
-            q['page'] = page
-        elif countback:
+        # countback مقدم بر page است (صفحهٔ اول با countback = «تازه‌ترین N کندل»)
+        # — مثل backend/index.php: هم درخواست‌ها یکی می‌شوند، هم برای پنل ۶۰
+        # کندلی، ۵۰۰ کندل اضافه دانلود نمی‌شود (Pi Zero / اینترنت کند).
+        if countback and page <= 1:
             q['countback'] = int(countback)
+        elif page > 0:
+            q['page'] = page
         else:
             q['from'] = int(frm)
         url = NOB_URL + '?' + urllib.parse.urlencode(q)
