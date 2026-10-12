@@ -316,13 +316,15 @@ class MarketFeed:
         page>0 صفحهٔ کندل‌های قدیمی‌تر را می‌گیرد (تایم‌فریم عمیق).
         """
         q = {'symbol': market, 'resolution': res, 'to': int(to)}
-        # countback مقدم بر page است (صفحهٔ اول با countback = «تازه‌ترین N کندل»)
-        # — مثل backend/index.php: هم درخواست‌ها یکی می‌شوند، هم برای پنل ۶۰
-        # کندلی، ۵۰۰ کندل اضافه دانلود نمی‌شود (Pi Zero / اینترنت کند).
-        if countback and page <= 1:
+        # چیدمان query عیناً مثل backend/index.php (نوبیتکس): صفحهٔ اول با
+        # countback («تازه‌ترین N کندل») و در حالت بازه‌دار با from؛ صفحه‌های
+        # بعدی با page. یکی‌بودن درخواست‌ها ⇒ یکی‌بودن داده، مستقل از معنای
+        # دقیق page/from در API — و برای پنل ۶۰ کندلی ۵۰۰ کندل اضافه دانلود
+        # نمی‌شود (Pi Zero / اینترنت کند).
+        if page > 1:
+            q['page'] = int(page)
+        elif countback:
             q['countback'] = int(countback)
-        elif page > 0:
-            q['page'] = page
         else:
             q['from'] = int(frm)
         url = NOB_URL + '?' + urllib.parse.urlencode(q)

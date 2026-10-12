@@ -200,7 +200,10 @@ class MiniChart:
             else:
                 self.r._dashed_h(clipY(marks[0]), gx0, gx1, mcol, 3, 4)
 
-        # خطوط رسم‌شدهٔ کاربر (مختصات درصدی ۰..۱۰۰ از مستطیل پنل)
+        # خطوط رسم‌شدهٔ کاربر — مختصات درصدی ۰..۱۰۰ از «ناحیهٔ رسم» (نه کل پنل).
+        # این همان قراردادی است که ادیتور وب می‌نویسد (posOf نسبت به مستطیل پلات)
+        # و chart.py در حالت تکی هم همان را می‌خواند. پیش‌تر مختصات روی کل پنل
+        # نگاشت می‌شد، پس خطی که در وب کشیده می‌شد روی LCD جای دیگری می‌افتاد.
         # لنگر عمودی قیمت (py) — مثل chart.py: اگر قیمت‌ها معتبر و هم‌طول
         # pts بودند از Y(price) استفاده می‌شود، وگرنه درصد قدیمی
         for ln in (trend_lines or []):
@@ -216,7 +219,7 @@ class MiniChart:
                     fy = max(0.0, min(1.0, float(pt[1]) / 100.0))
                 except (TypeError, ValueError, IndexError):
                     continue
-                xx = int(x0 + fx * (x1 - 1 - x0))
+                xx = int(gx0 + fx * (gx1 - 1 - gx0))
                 yy = None
                 if use_py:
                     try:
@@ -224,9 +227,9 @@ class MiniChart:
                     except (TypeError, ValueError):
                         pv = 0.0
                     if pv > 0:
-                        yy = int(max(y0, min(Y(pv), y1 - 1)))
+                        yy = clipY(pv)
                 if yy is None:
-                    yy = int(y0 + fy * (y1 - y0))
+                    yy = int(gy0 + fy * (gy1 - gy0))
                 pts.append((xx, yy))
             if len(pts) >= 2:
                 self.r._polyline(pts, lcol, 1)
