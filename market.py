@@ -29,6 +29,7 @@ BRS_DEFAULT_KEY = 'Bh3LYInFHUrNlvWHLikv2sTiUYGwajqe'
 NOB_TIMEOUT = 10
 BRS_TIMEOUT = 12
 NOB_TTL = 30          # کش کندل کریپتو — تقریباً زنده
+NEG_TTL = 5           # کش خطا (None) — کوتاه تا قطعیِ کوتاه سریع جبران شود
 QUOTE_TTL = 45        # کش قیمت لحظه‌ای
 SNAP_TTL = 60         # اسنپ‌شات بازار ایران
 SNAP_MAXAGE = 3600    # در قطعی منبع، کش کهنه معتبر است
@@ -54,6 +55,18 @@ NOB_MAX_PAGES = 6      # حداکثر ۶ صفحه در هر فید
 NOB_RANGE_MAX = NOB_PAGE_MAX * NOB_MAX_PAGES   # بودجهٔ کندل برای بازهٔ تاریخی
 
 FA_DIGITS = str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')
+
+
+def cache_bucket(ttl: int) -> int:
+    """زمان را روی باکت TTL گرد می‌کند.
+
+    کلید/پارامتر «to» باید در طول پنجرهٔ TTL ثابت بماند تا کش واقعاً hit شود
+    (هم‌قرارداد با backend/index.php → cache_bucket). با to=now هر ثانیه
+    درخواست و کلید تازه ساخته می‌شد: مصرف بی‌دلیل شبکه/دی‌ان‌اس روی Pi Zero
+    و کندی چرخهٔ poll.
+    """
+    ttl = max(1, int(ttl))
+    return int(time.time()) // ttl * ttl
 
 
 # ------------------------- تاریخ شمسی -------------------------
@@ -222,7 +235,9 @@ class MarketFeed:
             val = None
         if len(self._cache) > 512:      # پاک‌سازی کلیدهای کهنه
             self._cache = {k: v for k, v in self._cache.items() if v[0] > now}
-        self._cache[key] = (now + ttl, val)
+        # خطا فقط چند ثانیه کش می‌شود؛ وگرنه یک قطعی کوتاه شبکه، داده را
+        # برای تمام TTL (روزانه: ۶ ساعت) «None» نگه می‌داشت و چارت خالی می‌شد.
+        self._cache[key] = (now + (ttl if val is not None else min(ttl, NEG_TTL)), val)
         return val
 
     # ---------------- BrsApi: بازار ایران ----------------
@@ -351,7 +366,7 @@ class MarketFeed:
           * بی‌بازه → یک درخواست با countback=limit (تازه‌ترین N کندل)
           * بازهٔ تاریخی → رزولوشن متناسب + صفحه‌بندی (page) برای کندل‌های قدیمی‌تر
         """
-        to = int(to_ts or time.time())
+        to = int(to_ts) if to_ts else cache_bucket(NOB_TTL)
 
         # 1W پشتیبانی UDF ندارد → از روزانهٔ نوبیتکس می‌سازیم (aggregate).
         # مه: باکت هفتگی با floor(روز/604800) کلید می‌خورد؛ با دستکاری می‌یابیم:
@@ -471,7 +486,7 @@ class MarketFeed:
         return self._quote_brs(symbol)
 
     def _quote_nobitex(self, symbol):
-        to = int(time.time())
+        to = cache_bucket(QUOTE_TTL)
         frm = to - 86400
 
         def _fetch():

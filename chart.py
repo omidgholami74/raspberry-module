@@ -1340,6 +1340,35 @@ class ChartRenderer:
         self.sc.flush(self.img)
         self._dirty = None
 
+    def status(self, ok, note=''):
+        """نشانگر وضعیت اتصال در گوشهٔ راستِ نوار پایین — بدون پاک‌کردن چارت.
+        ok=False یعنی ارتباط/داده قطع است، ولی آخرین فریم روی صفحه می‌ماند؛
+        فقط نقطه/متن قرمز می‌شود (سبز = سالم).
+        """
+        t = self.theme
+        h = 16 if self.H < 320 else 20
+        y0 = self.H - h
+        cy = y0 + h // 2
+        txt = 'LIVE' if ok else 'OFFLINE'
+        if note:
+            txt += ' · ' + str(note)[:18]
+        w = int(self.d.textlength(txt, font=self.fonts.get(10))) + 22
+        x0 = max(0, self.W - 6 - w)
+        col = t['up'] if ok else t['down']
+        # فقط همین تکهٔ کوچک نوار پایین بازنویسی/فلاش می‌شود؛ عرضِ پاک‌سازی
+        # شامل نشانگر قبلی هم می‌شود تا متن بلندترِ «OFFLINE · 12s» نماند.
+        x_clear = min(x0, getattr(self, '_status_x0', self.W))
+        self._status_x0 = x0
+        self.d.rectangle([x_clear, y0, self.W, y0 + h], fill=t['panel'])
+        self.d.ellipse([x0 + 4, cy - 3, x0 + 10, cy + 3], fill=col)
+        self._text((x0 + 14, cy), txt, 10, col, anchor='lm')
+        if self.sc.rotate:
+            self.sc.flush(self.img)      # چرخش فقط فلاش کامل دارد
+        else:
+            self.sc.flush(self.img, (x_clear, y0, self.W, self.H))
+        # فریم بعدی باید همین ناحیه را هم فلاش کند
+        self._dirty = [x_clear, y0, self.W, self.H]
+
     def offline(self, retry_in=10):
         t = THEMES['dark']
         self.theme = t

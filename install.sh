@@ -87,7 +87,10 @@ mkdir -p "$INSTALL_DIR"
 cp "$SRC_DIR/chart.py" "$SRC_DIR/main.py" "$SRC_DIR/mini_chart.py" \
    "$SRC_DIR/wifi.py" "$SRC_DIR/market.py" "$SRC_DIR/updater.py" \
    "$SRC_DIR/install.sh" "$INSTALL_DIR/"
-chmod +x "$INSTALL_DIR/main.py"
+# اختیاری: پایدارسازی شبکهٔ Pi (DNS/power-save) — نبودش نصب را خراب نمی‌کند
+cp "$SRC_DIR/netfix.sh" "$INSTALL_DIR/" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/main.py" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/netfix.sh" 2>/dev/null || true
 
 # --- نسخهٔ نصب‌شده ----------------------------------------------------------
 # منبع git_rev() در نصب کپی‌شده همین فایل است و وب‌اپ آن را «Module version»

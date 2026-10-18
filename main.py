@@ -13,6 +13,7 @@ CryptoChart Client — ماژول رزبری پای زیرو
 
 import argparse
 import json
+import random
 import signal
 import socket
 import sys
@@ -30,8 +31,9 @@ from updater import UpdateReporter
 
 USER_AGENT = 'CryptoChart-Pi/1.0'
 POLL_WAIT = 45          # سرور تا ۱۵ ثانیه نگه می‌دارد + زمان دریافت فید؛ حاشیهٔ امن
-RETRY_BASE = 3
-RETRY_MAX = 30
+RETRY_BASE = 2          # خطاهای کوتاه سریع جبران شوند (چارت روی صفحه می‌ماند)
+RETRY_MAX = 15
+PANE_BUDGET = 12        # سقف زمان فچ پنل‌های چندچارت در هر سیکل (ثانیه)
 
 
 def log(msg):
@@ -197,6 +199,42 @@ def main():
     # ---------- حلقهٔ اصلی ----------
     version = 0
     retry = 0
+    last_ok = 0.0           # زمان آخرین فریم سالم (مبنای نشانگر وضعیت)
+    have_frame = False      # آیا چارتی روی صفحه هست؟
+    was_offline = False
+    last_key = None         # کلید فریم سالم: (نماد، تایم‌فریم، بازه)
+    last_candles = None
+    last_price = None
+    last_panes = {}         # کندل‌های سالم هر پنل: 'ETH:15m' → candles
+
+    def next_wait():
+        """تأخیر تلاش مجدد با jitter — خطاهای کوتاه سریع جبران می‌شوند."""
+        w = min(RETRY_MAX, RETRY_BASE * (2 ** min(retry, 4)))
+        return w + random.uniform(0, 0.9)
+
+    def offline_notice(note=''):
+        """قطعی موقت: چارت قبلی روی صفحه می‌ماند؛ فقط نشانگر قرمز می‌شود."""
+        nonlocal was_offline
+        was_offline = True
+        try:
+            if have_frame:
+                renderer.status(False, note)
+            else:
+                renderer.offline(retry_in=int(next_wait()))
+        except Exception:
+            pass
+
+    def pause(seconds):
+        """خواب بین تلاش‌ها با به‌روزرسانی نشانگر — چارت دست‌نخورده می‌ماند."""
+        end = time.time() + seconds
+        while running and time.time() < end:
+            time.sleep(0.5)
+            if have_frame:
+                try:
+                    renderer.status(False, f'{int(time.time() - last_ok)}s')
+                except Exception:
+                    pass
+
     wait_for_network()
 
     # سلام اولیه — نمایش وضعیت سرور روی اسپلش
@@ -206,12 +244,15 @@ def main():
         log(f'server ok — config v{version}')
     except Exception as e:
         log(f'health check failed: {e}')
-        renderer.offline(retry_in=RETRY_BASE)
+        offline_notice()
 
     while running:
         try:
             data = api.poll(version)
             retry = 0
+            if was_offline:
+                log('connection restored')
+                was_offline = False
 
             cfg = data.get('config') or {}
             if not validate_config(cfg):
@@ -233,13 +274,22 @@ def main():
             # کریپتو → نوبیتکس | بازار ایران → BrsApi؛ سرور فقط کنترل/تنظیمات است.
             # اگر هیچ منبعی جواب نداد، کندل/قیمت سرور به‌عنوان fallback می‌آید.
             limit = int(cfg.get('limit') or 90)
+            r_from = int(cfg.get('rangeFrom') or 0)
+            r_to = int(cfg.get('rangeTo') or 0)
+            frame_key = (str(cfg.get('symbol')), str(cfg.get('interval')), r_from, r_to)
             candles, source = unpack_feed(
                 market.feed(cfg.get('symbol'), cfg.get('interval', '15m'),
-                            limit, int(cfg.get('rangeFrom') or 0),
-                            int(cfg.get('rangeTo') or 0)))
+                            limit, r_from, r_to))
+            stale_frame = bool(data.get('stale'))
             if candles is None:
                 candles = data.get('candles') or []
                 source = 'server'
+            if not candles and last_candles and frame_key == last_key:
+                # منبع لحظه‌ای قطع شد ولی آخرین کندل‌های سالم را داریم →
+                # چارت روی صفحه می‌ماند (فقط نشانگر قرمز می‌شود)
+                candles = last_candles
+                source = 'cache'
+                stale_frame = True
             if source != last_source:
                 log(f'data source: {source or "none"} ({len(candles)} candles, '
                     f'{cfg.get("symbol")} {cfg.get("interval")})')
@@ -247,11 +297,23 @@ def main():
 
             price, _src = build_price(market, cfg.get('symbol'),
                                       data.get('price'), data.get('iranInfo'))
+            if not float(price.get('price') or 0) and last_price:
+                price = dict(last_price)      # قیمت آخرین فریم سالم بماند
+                stale_frame = True
 
             panes = data.get('panes') or {}
             if panes and cfg.get('layout', 'single') != 'single':
+                # چهار پنل × منابع کند اینترنتی می‌توانست تا ۴۰ ثانیه سیکل را
+                # عقب بیندازد و poll بعدی دیر شود (وب‌اپ «آفلاین» می‌دید).
+                # پس پنل‌ها بودجه دارند: هرچه نرسید، کندل‌های سالم قبلی‌اش می‌ماند.
+                pane_deadline = time.time() + PANE_BUDGET
                 for key, pf in panes.items():
                     if not isinstance(pf, dict) or ':' not in key:
+                        continue
+                    if time.time() > pane_deadline:
+                        if last_panes.get(key):
+                            pf['candles'] = last_panes[key]
+                            pf['stale'] = True
                         continue
                     psym, piv = key.split(':', 1)
                     # بازهٔ تاریخی و بازهٔ قیمتی هر پنل مستقل است
@@ -261,14 +323,29 @@ def main():
                                                        pf_from, pf_to))
                     if nc is not None:
                         pf['candles'] = nc
+                        if nc:
+                            pf['stale'] = False
+                    elif last_panes.get(key):
+                        pf['candles'] = last_panes[key]   # پنل خالی نپرد
+                        pf['stale'] = True
                     pq = market.quote(psym)
                     if pq:
                         pf['price'] = {'price': pq['price'],
                                        'changePct': pq['changePct']}
 
-            renderer.render(candles, cfg, price, server_ok=not data.get('stale'),
+            renderer.render(candles, cfg, price, server_ok=not stale_frame,
                             ts=int(data.get('serverTime') or time.time()),
                             panes=panes)
+            have_frame = True
+            last_ok = time.time()
+            last_key = frame_key
+            if candles:
+                last_candles = candles
+            if float(price.get('price') or 0):
+                last_price = price
+            for key, pf in panes.items():
+                if pf.get('candles'):
+                    last_panes[key] = pf['candles']
 
             # فرمان وای‌فای در انتظار؟
             cmd = data.get('wifiCmd') or {}
@@ -315,42 +392,40 @@ def main():
         except KeyboardInterrupt:
             break
         except urllib.error.HTTPError as e:
-            # پاسخ 4xx/5xx یعنی سرور در دسترس است ولی URL یا دسترسی غلط است
-            wait_s = min(RETRY_MAX, RETRY_BASE * (2 ** min(retry, 4)))
-            retry += 1
+            # 401/403/404 = آدرس/دسترسی غلط (تا اصلاح نشود چارت معنی ندارد)
+            # 5xx/502/504 = خطای گذاری هاست اشتراکی → چارت بماند، نشانگر قرمز
             code = e.code
-            hint = ('آدرس API اشتباه است یا سرور اجازهٔ دسترسی نمی‌دهد'
-                    if code in (401, 403, 404) else 'خطای سمت سرور')
-            log(f'HTTP {code} from {api.base} — {hint} — retry in {wait_s}s')
-            try:
-                renderer.config_error(code, hint, url=api.base, retry_in=wait_s)
-            except Exception:
-                pass
-            for _ in range(wait_s * 2):
-                if not running:
-                    break
-                time.sleep(0.5)
-        except Exception as e:
-            wait_s = min(RETRY_MAX, RETRY_BASE * (2 ** min(retry, 4)))
+            wait_s = next_wait()
             retry += 1
-            if isinstance(e, NET_ERRORS):
-                log(f'network error: {e} — retry in {wait_s}s')
+            if code in (401, 403, 404):
+                hint = 'آدرس API اشتباه است یا سرور اجازهٔ دسترسی نمی‌دهد'
+                log(f'HTTP {code} from {api.base} — {hint} — retry in {int(wait_s)}s')
+                have_frame = False
                 try:
-                    renderer.offline(retry_in=wait_s)
+                    renderer.config_error(code, hint, url=api.base,
+                                          retry_in=int(wait_s))
                 except Exception:
                     pass
             else:
+                log(f'HTTP {code} from {api.base} — خطای سمت سرور — retry in {int(wait_s)}s')
+                offline_notice(f'HTTP {code}')
+            pause(wait_s)
+        except Exception as e:
+            wait_s = next_wait()
+            retry += 1
+            if isinstance(e, NET_ERRORS):
+                log(f'network error: {e} — retry in {int(wait_s)}s')
+                offline_notice()
+            else:
                 # خطای منطقی/رندر است نه شبکه — نباید صفحه را «آفلاین» نشان دهد
                 traceback.print_exc()
-                log(f'ERROR (not network): {type(e).__name__}: {e} — retry in {wait_s}s')
+                log(f'ERROR (not network): {type(e).__name__}: {e} — retry in {int(wait_s)}s')
                 try:
-                    renderer.error(f'{type(e).__name__}: {e}'[:80], retry_in=wait_s)
+                    renderer.error(f'{type(e).__name__}: {e}'[:80], retry_in=int(wait_s))
+                    have_frame = False
                 except Exception:
                     pass
-            for _ in range(wait_s * 2):
-                if not running:
-                    break
-                time.sleep(0.5)
+            pause(wait_s)
 
     renderer.sc.close()
     log('bye')
