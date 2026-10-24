@@ -4,7 +4,13 @@
 MarketFeed — تمام دادهٔ بازار مستقیماً روی خود ماژول
 ------------------------------------------------------
 * ارز دیجیتال  → نوبیتکس (udf/history) + قیمت لحظه‌ای از همان UDF
-* بازار ایران   → BrsApi (اسنپ‌شات Gold_Currency.php + Pro Gold_Currency_Pro.php)
+* بازار ایران   → tgju (طلا، سکه، ارز، نفت/انرژی و کالا — پیش‌فرض)
+                  یا BrsApi (اسنپ‌شات Gold_Currency.php + Pro Gold_Currency_Pro.php)
+* منبع هر بخش از کانفیگ سرور می‌آید (`sources` در پاسخ poll):
+      {'crypto': 'nobitex', 'iran': 'tgju' | 'brsapi'}
+  کد هر دو منبع کامل در کد هست تا هر وقت خواستید با یک کلید عوضش کنید.
+  پیش‌فرض iran = tgju است؛ BrsApi موقتاً از کار افتاده و فقط با انتخاب
+  صریح استفاده می‌شود.
 * سرور فقط کانفیگ می‌دهد (و کلید BrsApi را داخل کانفیگ می‌فرستد)؛ هیچ دادهٔ بازاری
   از سرور خوانده نمی‌شود.
 * همهٔ متدها در صورت خطا/قطعی، None برمی‌گردانند → فراخواننده تصمیم می‌گیرد.
@@ -19,6 +25,8 @@ import json
 import time
 import urllib.parse
 import urllib.request
+
+import tgju
 
 # ------------------------- منابع -------------------------
 NOB_URL = 'https://apiv2.nobitex.ir/market/udf/history'
@@ -38,6 +46,11 @@ DAILY_TTL = 21600     # کندل روزانه (۶ ساعت)
 DAILY_DAYS = 2000     # عمق تاریخچهٔ روزانه (~۵.۵ سال)
 RANGE_MAX = 3000      # سقف کندل خروجی (= بودجهٔ صفحه‌بندی نوبیتکس)
 LIMIT_MAX = 2000      # بیشترین تعداد کندل درخواستی کاربر
+
+# ------------------------- انتخاب منبع -------------------------
+# کلید بخش → منبع پیش‌فرض. مقدار مجاز هر کلید در SOURCES_AVAILABLE است.
+DEFAULT_SOURCES = {'crypto': 'nobitex', 'iran': 'tgju'}
+SOURCES_AVAILABLE = {'crypto': ('nobitex',), 'iran': ('tgju', 'brsapi')}
 
 INTERVALS = {
     '1m': 60, '3m': 180, '5m': 300, '15m': 900, '30m': 1800,
@@ -201,17 +214,32 @@ def aggregate(candles, bucket):
 class MarketFeed:
     """تمام دادهٔ بازار؛ همهٔ متدها در صورت خطا None (بدون استثنا) برمی‌گردانند."""
 
-    def __init__(self, key=BRS_DEFAULT_KEY, timeout=NOB_TIMEOUT):
+    def __init__(self, key=BRS_DEFAULT_KEY, timeout=NOB_TIMEOUT, sources=None):
         self.key = key or BRS_DEFAULT_KEY
         self.timeout = timeout
         self.last_error = ''       # آخرین خطا — برای لاگ و نمایش روی ماژول
         self._cache = {}
+        self.sources = dict(DEFAULT_SOURCES)
+        self.set_sources(sources)
 
     # ---------------- زیرساخت ----------------
     def set_key(self, key):
         if key and key != self.key:
             self.key = key
             self._cache.clear()
+
+    def set_sources(self, sources):
+        """منبع هر بخش را از کانفیگ سرور می‌گیرد (مقادیر نامعتبر نادیده)."""
+        if not isinstance(sources, dict):
+            return
+        for part, allowed in SOURCES_AVAILABLE.items():
+            val = str(sources.get(part) or '').strip().lower()
+            if val in allowed and self.sources.get(part) != val:
+                self.sources[part] = val
+                self._cache.clear()
+
+    def source(self, part):
+        return self.sources.get(part) or DEFAULT_SOURCES.get(part, '')
 
     def _http_json(self, url, timeout):
         req = urllib.request.Request(url, headers={
@@ -455,12 +483,15 @@ class MarketFeed:
 
     # ---------------- دسته‌بندی نماد ----------------
     def is_crypto(self, symbol):
-        """True اگر رمزارز باشد (نوبیتکس)؛ False برای بازار ایران (برس‌آپ)."""
+        """True اگر رمزارز باشد (نوبیتکس)؛ False برای بازار ایران (tgju/برس‌آپ)."""
         if not symbol:
             return False
         if _quote_only(symbol):
             return False
-        snap = self.snapshot()
+        # نماد بازار ایران (dلار/طلا/سکه/انرژی…) که tgju می‌شناسد
+        if tgju.resolve(symbol):
+            return False
+        snap = self.snapshot() if self.source('iran') == 'brsapi' else {}
         for key in (symbol, _brs_symbol(symbol)):
             it = snap.get(key)
             if it:
@@ -483,7 +514,34 @@ class MarketFeed:
             return None
         if self.is_crypto(symbol):
             return self._quote_nobitex(symbol)
+        if self.source('iran') == 'tgju':
+            return tgju.quote(symbol)
         return self._quote_brs(symbol)
+
+    # ---------------- tgju: بازار ایران ----------------
+    def _tgju_feed(self, symbol, bucket, limit, from_ts, to_ts):
+        """
+        کندل‌های بازار ایران از tgju: فقط تاریخچهٔ روزانه دارد (سایت روزانه
+        می‌دهد)؛ برای تایم‌فریم‌های ریزتر همان روزانه‌ها با fallbackDaily
+        برمی‌گردند تا چارت هیچ‌وقت خالی نشود.
+        خروجی: (candles|None, source)
+        """
+        all_c = tgju.history(symbol)
+        if all_c is None:
+            return None                 # خطای منبع → کش کوتاه (NEG_TTL)
+        if not all_c:
+            return [], 'tgju'
+        if bucket > 86400:
+            all_c = aggregate(all_c, bucket)
+        c = all_c
+        if from_ts or to_ts:
+            c = [x for x in c if (not from_ts or x['t'] >= int(from_ts))
+                 and (not to_ts or x['t'] <= int(to_ts))]
+        if len(c) > RANGE_MAX:
+            c = c[-RANGE_MAX:]
+        if not (from_ts or to_ts) and len(c) > limit:
+            c = c[-limit:]
+        return (c or None), ('tgju' if c else '')
 
     def _quote_nobitex(self, symbol):
         to = cache_bucket(QUOTE_TTL)
@@ -544,6 +602,13 @@ class MarketFeed:
             return c, ('nobitex' if c else '')
 
         # ---- بازار ایران ----
+        if self.source('iran') == 'tgju':
+            key = f'tgfe|{symbol}|{interval}|{limit}|{from_ts}|{to_ts}'
+            got = self._get(key, NOB_TTL,
+                            lambda: self._tgju_feed(symbol, bucket, limit,
+                                                    from_ts, to_ts))
+            return got if got is not None else (None, '')
+
         key = f'feed|{symbol}|{interval}|{limit}|{from_ts}|{to_ts}'
         now = int(time.time())
 

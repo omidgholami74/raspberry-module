@@ -138,7 +138,7 @@ def unpack_feed(res, default_source='module'):
 
 def build_price(market, symbol, server_price, iran_info):
     """
-    قیمت لحظه‌ای را از ماژول می‌گیرد (نوبیتکس برای کریپتو، BrsApi برای ایران)
+    قیمت لحظه‌ای را از ماژول می‌گیرد (نوبیتکس برای کریپتو، tgju/BrsApi برای ایران)
     و با دادهٔ سرور تکمیل می‌کند؛ اگر ماژول جواب نداد، قیمت سرور استفاده می‌شود.
     خروجی: (price_info, source)
     """
@@ -170,7 +170,7 @@ def main():
     api = ApiClient(args.url)
     wifi_reporter = WifiReporter(args.url)
     update_reporter = UpdateReporter(args.url)
-    market = MarketFeed()   # همهٔ دادهٔ بازار مستقیم از ماژول (نوبیتکس/برس‌آپ)
+    market = MarketFeed()   # همهٔ دادهٔ بازار مستقیم از ماژول (نوبیتکس/tgju)
     last_source = ''
     _last_update_ts = 0.0   # last handled updateCmd ts — هر فرمان فقط بار اجرا شود
 
@@ -270,8 +270,13 @@ def main():
             if bkey:
                 market.set_key(bkey)
 
+            # ---- منبع هر بخش از کانفیگ سرور ----
+            # {'crypto': 'nobitex', 'iran': 'tgju'} — تا PWA بتواند عوضش کند.
+            market.set_sources(data.get('sources') or {})
+
             # ---- دادهٔ بازار: کاملاً مستقیم از ماژول ----
-            # کریپتو → نوبیتکس | بازار ایران → BrsApi؛ سرور فقط کنترل/تنظیمات است.
+            # کریپتو → نوبیتکس | بازار ایران → tgju (یا BrsApi اگر انتخاب شده)؛
+            # سرور فقط کنترل/تنظیمات است.
             # اگر هیچ منبعی جواب نداد، کندل/قیمت سرور به‌عنوان fallback می‌آید.
             limit = int(cfg.get('limit') or 90)
             r_from = int(cfg.get('rangeFrom') or 0)

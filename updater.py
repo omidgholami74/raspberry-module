@@ -37,7 +37,7 @@ DEFAULT_BRANCH = 'main'
 
 # فایل‌هایی که ماژول از آن‌ها ساخته می‌شود — آپدیت فقط همین‌ها را عوض می‌کند
 MODULE_FILES = ('chart.py', 'main.py', 'mini_chart.py', 'wifi.py', 'market.py',
-                'updater.py', 'install.sh', 'netfix.sh')
+                'tgju.py', 'updater.py', 'install.sh', 'netfix.sh')
 
 UA = 'CryptoChart-Pi/1.0'
 HTTP_TIMEOUT = 30

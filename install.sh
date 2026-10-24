@@ -85,8 +85,8 @@ mkdir -p "$INSTALL_DIR"
 # حیاتی: updater.py و install.sh هم کپی می‌شوند — آپدیت آنلاین ماژول
 # (check/install از وب‌اپ) بدون آن‌ها کار نمی‌کند
 cp "$SRC_DIR/chart.py" "$SRC_DIR/main.py" "$SRC_DIR/mini_chart.py" \
-   "$SRC_DIR/wifi.py" "$SRC_DIR/market.py" "$SRC_DIR/updater.py" \
-   "$SRC_DIR/install.sh" "$INSTALL_DIR/"
+   "$SRC_DIR/wifi.py" "$SRC_DIR/market.py" "$SRC_DIR/tgju.py" \
+   "$SRC_DIR/updater.py" "$SRC_DIR/install.sh" "$INSTALL_DIR/"
 # اختیاری: پایدارسازی شبکهٔ Pi (DNS/power-save) — نبودش نصب را خراب نمی‌کند
 cp "$SRC_DIR/netfix.sh" "$INSTALL_DIR/" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/main.py" 2>/dev/null || true
