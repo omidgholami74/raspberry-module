@@ -26,7 +26,13 @@ import time
 import urllib.parse
 import urllib.request
 
-import tgju
+try:
+    import tgju
+except Exception as _e:      # فایل نبود/نیمه‌آپدیت → بازار ایران از دادهٔ سرور
+    tgju = None
+    TGJU_IMPORT_ERROR = f'{type(_e).__name__}: {_e}'
+else:
+    TGJU_IMPORT_ERROR = ''
 
 # ------------------------- منابع -------------------------
 NOB_URL = 'https://apiv2.nobitex.ir/market/udf/history'
@@ -489,7 +495,7 @@ class MarketFeed:
         if _quote_only(symbol):
             return False
         # نماد بازار ایران (dلار/طلا/سکه/انرژی…) که tgju می‌شناسد
-        if tgju.resolve(symbol):
+        if tgju and tgju.resolve(symbol):
             return False
         snap = self.snapshot() if self.source('iran') == 'brsapi' else {}
         for key in (symbol, _brs_symbol(symbol)):
@@ -515,7 +521,7 @@ class MarketFeed:
         if self.is_crypto(symbol):
             return self._quote_nobitex(symbol)
         if self.source('iran') == 'tgju':
-            return tgju.quote(symbol)
+            return tgju.quote(symbol) if tgju else None
         return self._quote_brs(symbol)
 
     # ---------------- tgju: بازار ایران ----------------
@@ -526,6 +532,8 @@ class MarketFeed:
         برمی‌گردند تا چارت هیچ‌وقت خالی نشود.
         خروجی: (candles|None, source)
         """
+        if not tgju:
+            return None                 # ماژول tgju نصب نیست → دادهٔ سرور
         all_c = tgju.history(symbol)
         if all_c is None:
             return None                 # خطای منبع → کش کوتاه (NEG_TTL)
@@ -602,7 +610,7 @@ class MarketFeed:
             return c, ('nobitex' if c else '')
 
         # ---- بازار ایران ----
-        if self.source('iran') == 'tgju':
+        if self.source('iran') == 'tgju' and tgju:
             key = f'tgfe|{symbol}|{interval}|{limit}|{from_ts}|{to_ts}'
             got = self._get(key, NOB_TTL,
                             lambda: self._tgju_feed(symbol, bucket, limit,

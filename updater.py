@@ -217,17 +217,64 @@ def _installed_rev_is_known():
     return bool(rev) and rev.isalnum()
 
 
+def _file_ok(path):
+    """فایل پایتون سالم است؟ فقط کامپایل می‌شود (اجرا نمی‌شود)."""
+    if not path.endswith('.py'):
+        return True, ''
+    try:
+        with open(path, 'rb') as f:
+            compile(f.read(), path, 'exec')
+        return True, ''
+    except Exception as e:
+        return False, f'{type(e).__name__}: {e}'
+
+
 def _copy_module_files(src_dir):
     """فایل‌های ماژول را از پوشهٔ منبع (آرشیو بازشده) روی نصب می‌ریزد.
+
+    دو محافظ مهم (علت «بعد از آپدیت ماژول بالا نمی‌آید»):
+      1) همهٔ فایل‌های دانلودی قبل از دست‌زدن به نصب کامپایل می‌شوند؛ نسخهٔ
+         ناقص/خراب اصلاً نصب نمی‌شود.
+      2) نسخهٔ قبلی نگه داشته می‌شود و اگر کپی یا کامپایل فایل نصب‌شده خطا
+         داد، همان نسخهٔ سالم برمی‌گردد (نصب نیمه‌کاره نه).
     خروجی: (موفق، پیام خطا)."""
     missing = [f for f in MODULE_FILES if not os.path.isfile(os.path.join(src_dir, f))]
     if missing:
         return False, 'فایل‌های لازم در آرشیو نیستند: ' + ','.join(missing[:4])
     for f in MODULE_FILES:
+        ok, err = _file_ok(os.path.join(src_dir, f))
+        if not ok:
+            return False, f'نسخهٔ دانلودی سالم نیست ({f}: {err}) — نصب انجام نشد'
+
+    old = {}
+    for f in MODULE_FILES:
+        try:
+            with open(os.path.join(PI_DIR, f), 'rb') as fh:
+                old[f] = fh.read()
+        except OSError:
+            old[f] = None
+
+    def restore():
+        for name, data in old.items():
+            if data is None:
+                continue
+            try:
+                with open(os.path.join(PI_DIR, name), 'wb') as fh:
+                    fh.write(data)
+            except OSError:
+                pass
+
+    for f in MODULE_FILES:
         try:
             shutil.copyfile(os.path.join(src_dir, f), os.path.join(PI_DIR, f))
         except OSError as e:
+            restore()
             return False, (f'کپی {f} نشد ({e.strerror or e}) — ' + RECOMMENDED_ACTION)
+        ok, err = _file_ok(os.path.join(PI_DIR, f))
+        if not ok:
+            restore()
+            return False, (f'فایل نصب‌شده سالم نیست ({f}: {err}) — نسخهٔ قبلی '
+                           'برگردانده شد')
     return True, ''
 
 

@@ -41,6 +41,7 @@ UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 CryptoChart-Pi/1.0'
 PAGE_TIMEOUT = 25      # صفحهٔ اصلی ~۱.۵ مگابایت است
 JSON_TIMEOUT = 12
 PAGE_TTL = 120         # کش قیمت‌های فهرست (snapshot)
+QUOTE_TTL = 60         # کش قیمت لحظه‌ای هر نماد (از همان صفحهٔ جدول)
 CATALOG_TTL = 21600    # کش فهرست نمادها (نام/بخش) — ۶ ساعت
 HIST_TTL = 120         # کش تاریخچه/قیمت هر نماد
 NEG_TTL = 5            # کش خطا — کوتاه تا قطعیِ کوتاه سریع جبران شود
@@ -555,6 +556,40 @@ def _day_candles(j):
     return [days[k] for k in sorted(days)]
 
 
+# آخرین تاریخچهٔ سالم هر نماد — قطعی موقت منبع نباید چارت را خالی کند.
+_LAST_GOOD = {}
+
+
+def _patch_today(candles, slug):
+    """آخرین کندل روزانه را با قیمت لحظه‌ای (اگر صفحهٔ جدول کش شده باشد) هم‌گام
+    می‌کند — بدون هیچ درخواست اضافه. tvdata روز جاری را با تأخیر می‌دهد، پس
+    بدون این کار قیمت روی چارت ساعاتی «یخ» می‌ماند."""
+    if not candles:
+        return candles
+    row = None
+    for area in ('main', 'energy'):
+        pages = _cache_get('page|' + area)
+        if pages is _MISS or not pages:
+            continue
+        row = _rows_by_slug(pages).get(slug.upper())
+        if row:
+            break
+    price = float((row or {}).get('price') or 0) * scale_of(slug)
+    if price <= 0:
+        return candles
+    today = int(time.time()) // 86400 * 86400 + 43200
+    last = candles[-1]
+    if last['t'] >= today - 86400:          # امروز یا دیروز → به‌روز کن
+        if last['t'] == today:
+            last['h'] = max(last['h'], price)
+            last['l'] = min(last['l'], price)
+            last['c'] = price
+        else:                               # کندل امروز هنوز نیست → بساز
+            candles.append({'t': today, 'o': last['c'], 'h': max(last['c'], price),
+                            'l': min(last['c'], price), 'c': price, 'v': 0.0})
+    return candles
+
+
 def history(symbol, force=False):
     """کندل روزانهٔ نماد (تومان برای نماد ریالی) — None در خطا، [] بی‌داده"""
     slug = resolve(symbol)
@@ -567,9 +602,12 @@ def history(symbol, force=False):
             return hit
     j = http_json(TGJU_HISTORY_URL + '?symbol=' + urllib.parse.quote(slug),
                   JSON_TIMEOUT)
-    if not isinstance(j, dict):
-        return _cache_put(key, HIST_TTL, None)
-    if (j.get('s') or '') not in ('', 'ok'):
+    if not isinstance(j, dict) or (j.get('s') or '') not in ('', 'ok'):
+        # منبع خطا داد (tgju گاهی 500 می‌دهد): اگر تاریخچهٔ سالم قبلی داریم
+        # همان را بده تا چارت خالی/سیاه نشود.
+        prev = _LAST_GOOD.get(slug)
+        if prev:
+            return _cache_put(key, NEG_TTL, prev)
         return _cache_put(key, HIST_TTL, None)
     candles = _day_candles(j)
     if candles:
@@ -583,28 +621,64 @@ def history(symbol, force=False):
     # برچسب روز در محور شمسی و باکت‌های هفتگی همه‌جا یکی باشد.
     for cd in candles:
         cd['t'] += 43200
-    return _cache_put(key, HIST_TTL, candles)
+    _LAST_GOOD[slug] = candles
+    return _cache_put(key, HIST_TTL, _patch_today(candles, slug))
+
+
+def _live_row(slug):
+    """ردیف قیمت لحظه‌ای یک نماد از جدول سایت (کش‌شده).
+    فقط همان صفحه‌ای خوانده می‌شود که نماد در آن است — نه هر دو صفحه."""
+    area = 'energy' if section_of(slug, 'main') == 'energy' else 'main'
+    pages = main_page_html() if area == 'main' else energy_page_html()
+    row = _rows_by_slug(pages or '').get(slug.upper())
+    if not row and area == 'main':      # نماد انرژی بود که در صفحهٔ اصلی نیست
+        row = _rows_by_slug(energy_page_html() or '').get(slug.upper())
+    return row
 
 
 def quote(symbol):
     """قیمت لحظه‌ای بازار ایران → dict (price, changePct, unit, source) | None
 
-    منبع: آخرین کندل روزانه (همان درخواستی که چارت لازم دارد ⇒ بدون درخواست
-    اضافه روی Pi). تغییر نسبت به کندل روز قبل است.
+    منبع اول: قیمت لحظه‌ای جدول سایت (همان صفحه‌ای که برای فهرست بازار هم
+    لازم است) — پس قیمت دلار/سکه بین دو کندل روزانه «یخ» نمی‌ماند.
+    منبع پشتیبان: آخرین کندل روزانه (اگر اندپوینت جدول در دسترس نبود).
     """
+    slug = resolve(symbol)
+    if not slug:
+        return None
+    key = 'q|' + slug
+    hit = _cache_get(key)
+    if hit is not _MISS:
+        return hit
+
+    row = _live_row(slug) or {}
+    price = float(row.get('price') or 0) * scale_of(slug)
+    if price > 0:
+        pct = float(row.get('changePct') or 0.0)
+        chg = float(row.get('change') or 0.0) * scale_of(slug)
+        if not chg and pct:
+            chg = price * pct / (100.0 + pct) if pct != -100 else 0.0
+        return _cache_put(key, QUOTE_TTL, {
+            'symbol': str(symbol), 'price': price, 'changePct': pct,
+            'change_value': round(chg, 4), 'unit': unit_of(slug),
+            'name': str(row.get('name') or ''), 'source': 'tgju'})
+
+    # پشتیبان: آخرین کندل روزانه (بدون درخواست اضافه، در کش است)
     c = history(symbol)
     if c is None:
         return None
-    if not c:
-        return {'symbol': str(symbol), 'price': 0.0, 'changePct': 0.0,
-                'change_value': 0.0, 'unit': unit_of(resolve(symbol) or ''),
-                'name': '', 'source': 'tgju'}
+    if not c:                       # نماد شناخته‌شده ولی بی‌داده → قیمت صفر
+        return _cache_put(key, NEG_TTL, {
+            'symbol': str(symbol), 'price': 0.0, 'changePct': 0.0,
+            'change_value': 0.0, 'unit': unit_of(slug), 'name': '',
+            'source': 'tgju'})
     price = float(c[-1]['c'])
     prev = float(c[-2]['c']) if len(c) > 1 else price
-    chg = ((price - prev) / prev * 100.0) if prev else 0.0
-    return {'symbol': str(symbol), 'price': price, 'changePct': chg,
-            'change_value': price - prev, 'unit': unit_of(resolve(symbol) or ''),
-            'name': '', 'source': 'tgju'}
+    chg_pct = ((price - prev) / prev * 100.0) if prev else 0.0
+    return _cache_put(key, NEG_TTL, {
+        'symbol': str(symbol), 'price': price, 'changePct': chg_pct,
+        'change_value': price - prev, 'unit': unit_of(slug),
+        'name': '', 'source': 'tgju'})
 
 
 def snapshot(force=False):
@@ -617,16 +691,24 @@ def snapshot(force=False):
     items = {}
     for area, html in (('main', main_page_html()),
                        ('energy', energy_page_html())):
-        for row in parse_rows(html or ''):
-            up = row['slug'].upper()
-            mult = scale_of(up)
-            items[up] = dict(row, slug=up, section=section_of(up, area),
-                             unit=unit_of(up),
-                             price=round(row['price'] * mult, 4),
-                             low=round(row['low'] * mult, 4),
-                             high=round(row['high'] * mult, 4),
-                             symbol=app_symbol(up), source='tgju')
+        for up, it in _area_items(area, html).items():
+            items[up] = it
     return _cache_put(key, PAGE_TTL, items or None) or {}
+
+
+def _area_items(area, html):
+    """ردیف‌های یک صفحه → دیکشنری با واحد/بخش/ضریب واحد"""
+    items = {}
+    for row in parse_rows(html or ''):
+        up = row['slug'].upper()
+        mult = scale_of(up)
+        items[up] = dict(row, slug=up, section=section_of(up, area),
+                         unit=unit_of(up),
+                         price=round(row['price'] * mult, 4),
+                         low=round(row['low'] * mult, 4),
+                         high=round(row['high'] * mult, 4),
+                         symbol=app_symbol(up), source='tgju')
+    return items
 
 
 # ------------------------- تاریخ شمسی (سازگار با ماژول) -------------------------

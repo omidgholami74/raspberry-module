@@ -24,10 +24,28 @@ import urllib.parse
 import urllib.request
 
 from chart import ChartRenderer, Screen
-from market import MarketFeed
 from wifi import scan as wifi_scan, current as wifi_current, connect as wifi_connect, WifiReporter
-import updater
-from updater import UpdateReporter
+
+# فایل بازار/آپدیت نیمه‌آپدیت یا خراب نباید کل ماژول را از کار بیندازد
+# (قبلاً اگر tgju.py یا market.py سر جایش نبود، سرویس بالا نمی‌آمد و صفحه سیاه
+# می‌ماند). حالا بدونه آن‌ها هم چارت با دادهٔ سرور بالا می‌آید.
+try:
+    from market import MarketFeed
+except Exception as _e:
+    MarketFeed = None
+    MARKET_IMPORT_ERROR = f'{type(_e).__name__}: {_e}'
+else:
+    MARKET_IMPORT_ERROR = ''
+
+try:
+    import updater
+    from updater import UpdateReporter
+except Exception as _e:
+    updater = None
+    UpdateReporter = None
+    UPDATER_IMPORT_ERROR = f'{type(_e).__name__}: {_e}'
+else:
+    UPDATER_IMPORT_ERROR = ''
 
 USER_AGENT = 'CryptoChart-Pi/1.0'
 POLL_WAIT = 45          # سرور تا ۱۵ ثانیه نگه می‌دارد + زمان دریافت فید؛ حاشیهٔ امن
@@ -136,6 +154,27 @@ def unpack_feed(res, default_source='module'):
     return res, default_source
 
 
+class _NoMarket:
+    """جانشین MarketFeed وقتی market.py لود نمی‌شود — دادهٔ سرور استفاده شود."""
+
+    def set_key(self, *_a, **_k):
+        pass
+
+    def set_sources(self, *_a, **_k):
+        pass
+
+    def feed(self, *_a, **_k):
+        return None, ''
+
+    def quote(self, *_a, **_k):
+        return None
+
+
+class _NullReporter:
+    def report(self, *_a, **_k):
+        return None
+
+
 def build_price(market, symbol, server_price, iran_info):
     """
     قیمت لحظه‌ای را از ماژول می‌گیرد (نوبیتکس برای کریپتو، tgju/BrsApi برای ایران)
@@ -169,8 +208,13 @@ def main():
 
     api = ApiClient(args.url)
     wifi_reporter = WifiReporter(args.url)
-    update_reporter = UpdateReporter(args.url)
-    market = MarketFeed()   # همهٔ دادهٔ بازار مستقیم از ماژول (نوبیتکس/tgju)
+    if MARKET_IMPORT_ERROR:
+        log(f'market.py load failed — server data only: {MARKET_IMPORT_ERROR}')
+    if UPDATER_IMPORT_ERROR:
+        log(f'updater.py load failed — online update off: {UPDATER_IMPORT_ERROR}')
+    update_reporter = UpdateReporter(args.url) if UpdateReporter else _NullReporter()
+    # همهٔ دادهٔ بازار مستقیم از ماژول (نوبیتکس/tgju)
+    market = MarketFeed() if MarketFeed else _NoMarket()
     last_source = ''
     _last_update_ts = 0.0   # last handled updateCmd ts — هر فرمان فقط بار اجرا شود
 
@@ -372,6 +416,9 @@ def main():
                 _last_update_ts = uts
                 act = str(ucmd.get('cmd'))
                 log(f'update command: {act}')
+                if not updater:
+                    log('update ignored — updater.py نصب/سالم نیست')
+                    continue
                 try:
                     _ran, res = updater.run_cmd(ucmd, update_reporter)
                     log(f'update {act}: {(res or {}).get("status")} — {(res or {}).get("message", "")[:120]}')

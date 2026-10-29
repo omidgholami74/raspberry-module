@@ -84,9 +84,58 @@ echo "==> copying files to $INSTALL_DIR ..."
 mkdir -p "$INSTALL_DIR"
 # حیاتی: updater.py و install.sh هم کپی می‌شوند — آپدیت آنلاین ماژول
 # (check/install از وب‌اپ) بدون آن‌ها کار نمی‌کند
-cp "$SRC_DIR/chart.py" "$SRC_DIR/main.py" "$SRC_DIR/mini_chart.py" \
-   "$SRC_DIR/wifi.py" "$SRC_DIR/market.py" "$SRC_DIR/tgju.py" \
-   "$SRC_DIR/updater.py" "$SRC_DIR/install.sh" "$INSTALL_DIR/"
+MODULE_FILES="chart.py main.py mini_chart.py wifi.py market.py tgju.py updater.py install.sh"
+for f in $MODULE_FILES; do
+  if [ ! -f "$SRC_DIR/$f" ]; then
+    echo "ERROR: $f در پوشهٔ ماژول نیست ($SRC_DIR) — نصب متوقف شد" >&2
+    exit 1
+  fi
+done
+
+# نسخهٔ سالم قبلی نگه داشته می‌شود: اگر کپی یا صحت‌سنجی خطا داد، همان برمی‌گردد
+# تا ماژول با فایل‌های نیمه‌کاره در crash loop نیفتد (تجربهٔ «بعد از آپدیت بالا نمی‌آید»).
+BACKUP_DIR="$(mktemp -d)"
+for f in $MODULE_FILES; do
+  if [ -f "$INSTALL_DIR/$f" ]; then cp "$INSTALL_DIR/$f" "$BACKUP_DIR/$f" || true; fi
+done
+restore_backup() {
+  for b in $MODULE_FILES; do
+    if [ -f "$BACKUP_DIR/$b" ]; then cp "$BACKUP_DIR/$b" "$INSTALL_DIR/$b" || true; fi
+  done
+  rm -rf "$BACKUP_DIR"
+}
+for f in $MODULE_FILES; do
+  if ! cp "$SRC_DIR/$f" "$INSTALL_DIR/$f"; then
+    echo "ERROR: کپی $f نشد — بازگردانی نسخهٔ قبلی" >&2
+    restore_backup
+    exit 1
+  fi
+done
+
+# صحت سینتکس: فایل خراب/نیمه‌دانلود نباید سرویس را از کار بیندازد
+if command -v python3 >/dev/null 2>&1; then
+  if ! python3 - "$INSTALL_DIR" <<'PYCHK'
+import os, sys
+bad = []
+for name in ('chart.py', 'main.py', 'mini_chart.py', 'wifi.py',
+             'market.py', 'tgju.py', 'updater.py'):
+    p = os.path.join(sys.argv[1], name)
+    try:
+        with open(p, 'rb') as fh:
+            compile(fh.read(), p, 'exec')
+    except Exception as e:
+        bad.append('%s (%s)' % (name, e))
+if bad:
+    print('bad: ' + '; '.join(bad))
+    sys.exit(1)
+PYCHK
+  then
+    echo "ERROR: فایل‌های نصب‌شده سالم نیستند — بازگردانی نسخهٔ قبلی" >&2
+    restore_backup
+    exit 1
+  fi
+fi
+rm -rf "$BACKUP_DIR"
 # اختیاری: پایدارسازی شبکهٔ Pi (DNS/power-save) — نبودش نصب را خراب نمی‌کند
 cp "$SRC_DIR/netfix.sh" "$INSTALL_DIR/" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/main.py" 2>/dev/null || true
