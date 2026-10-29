@@ -35,6 +35,10 @@ import urllib.request
 TGJU_BASE = 'https://www.tgju.org'
 TGJU_ENERGY_URL = 'https://www.tgju.org/energy'
 TGJU_HISTORY_URL = 'https://platform.tgju.org/fa/tvdata/history'
+# منبع دوم (و امروز منبع اصلی) تاریخچه: جدول روزانهٔ خود سایت. tvdata بالای
+# مدتی است برای همهٔ نمادها «500» می‌دهد و چارت بازار ایران خالی می‌شد.
+TGJU_SUMMARY_URL = 'https://api.tgju.org/v1/market/indicator/summary-table-data/'
+HISTORY_ROWS = 400     # ~۱۳ ماه کندل روزانه — سبک برای Pi، کافی برای چارت
 
 UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 CryptoChart-Pi/1.0'
 
@@ -590,6 +594,75 @@ def _patch_today(candles, slug):
     return candles
 
 
+def _day_epoch(text):
+    """'2026/10/27' → نیمه‌شب UTC همان روز (۰ در خطا)"""
+    m = re.match(r'^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$', str(text or '').strip())
+    if not m:
+        return 0
+    try:
+        return calendar.timegm((int(m.group(1)), int(m.group(2)),
+                                int(m.group(3)), 0, 0, 0))
+    except Exception:
+        return 0
+
+
+def _summary_candles(rows):
+    """ردیف‌های جدول خلاصهٔ سایت → کندل روزانه (نیمه‌شب UTC)
+
+    ستون‌ها: [بستن، کمترین، بیشترین، باز، تغییر، درصد، تاریخ میلادی، تاریخ شمسی]
+    سایت جدیدترین ردیف را اول می‌دهد؛ روز تکراری یکی می‌شود.
+    """
+    days = {}
+    for r in rows or []:
+        if not isinstance(r, (list, tuple)) or len(r) < 7:
+            continue
+        close = num(r[0])
+        if close <= 0:
+            continue
+        day = _day_epoch(r[6])
+        if not day:
+            continue
+        low = num(r[1]) or close
+        high = num(r[2]) or close
+        op = num(r[3]) or close
+        if high < low:
+            low, high = high, low
+        cur = days.get(day)
+        if cur is None:
+            days[day] = {'t': day, 'o': op, 'h': max(high, close),
+                         'l': min(low, close), 'c': close, 'v': 0.0}
+        else:
+            cur['h'] = max(cur['h'], high, close)
+            cur['l'] = min(cur['l'], low, close)
+            cur['c'] = close
+    return [days[k] for k in sorted(days)]
+
+
+def _summary_history(slug):
+    """تاریخچه از جدول روزانهٔ سایت؛ None یعنی منبع جواب نداد (نه «بی‌داده»)"""
+    base = TGJU_SUMMARY_URL + urllib.parse.quote(str(slug).lower())
+    # ترتیب تلاش: سبک‌ترین/جدیدترین → کامل، و در آخر صعودی (بعضی اسلاگ‌ها
+    # مثل oil_opec فقط با order_dir=asc جواب می‌دهند)
+    for tail in ('?lang=fa&order_dir=desc&start=0&length=%d' % HISTORY_ROWS,
+                 '?lang=fa&order_dir=desc', '?lang=fa&order_dir=asc'):
+        j = http_json(base + tail, JSON_TIMEOUT)
+        if not isinstance(j, dict):
+            continue
+        candles = _summary_candles(j.get('data'))
+        if candles:
+            return candles
+    return None
+
+
+def _tvdata_history(slug):
+    """تاریخچه از UDF تلویزیون مالی؛ None یعنی منبع خطا داد"""
+    j = http_json(TGJU_HISTORY_URL + '?symbol=' + urllib.parse.quote(slug),
+                  JSON_TIMEOUT)
+    if not isinstance(j, dict) or (j.get('s') or '') not in ('', 'ok'):
+        return None
+    return _day_candles(j)
+
+
 def history(symbol, force=False):
     """کندل روزانهٔ نماد (تومان برای نماد ریالی) — None در خطا، [] بی‌داده"""
     slug = resolve(symbol)
@@ -600,16 +673,16 @@ def history(symbol, force=False):
         hit = _cache_get(key)
         if hit is not _MISS:
             return hit
-    j = http_json(TGJU_HISTORY_URL + '?symbol=' + urllib.parse.quote(slug),
-                  JSON_TIMEOUT)
-    if not isinstance(j, dict) or (j.get('s') or '') not in ('', 'ok'):
-        # منبع خطا داد (tgju گاهی 500 می‌دهد): اگر تاریخچهٔ سالم قبلی داریم
-        # همان را بده تا چارت خالی/سیاه نشود.
+    candles = _summary_history(slug)
+    if candles is None:
+        candles = _tvdata_history(slug)
+    if candles is None:
+        # هر دو منبع خطا دادند: اگر تاریخچهٔ سالم قبلی داریم همان را بده تا
+        # چارت خالی/سیاه نشود.
         prev = _LAST_GOOD.get(slug)
         if prev:
             return _cache_put(key, NEG_TTL, prev)
         return _cache_put(key, HIST_TTL, None)
-    candles = _day_candles(j)
     if candles:
         _KNOWN_SLUGS.add(slug)
     mult = scale_of(slug)
