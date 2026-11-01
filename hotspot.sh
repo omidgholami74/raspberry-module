@@ -11,6 +11,9 @@
 #     sudo bash hotspot.sh off
 #     sudo bash hotspot.sh ensure        # از hotspot.json آخرین کانفیگ
 #
+#  صفحهٔ محلی روی پورت 8080 است؛ پورت 80 روی اینترفیس هات‌اسپات به همان
+#  ریدایرکت می‌شود، پس کلاینت فقط `http://10.42.0.1` را در مرورگر می‌زند.
+#
 #  چرا اینترفیس مجازی: brcmfmac روی پای هم‌زمان AP+STA می‌دهد، ولی هر کدام
 #  باید اینترفیس خودش را داشته باشد؛ پس ap0 روی همان wlan0 ساخته می‌شود و
 #  هر دو روی یک کانال کار می‌کنند (اتصال کلاینت قطع نمی‌شود).
@@ -138,6 +141,21 @@ share_internet() {
   fi
 }
 
+# پورت 80 هات‌اسپات → صفحهٔ محلی 8080 (کلاینت فقط IP را در مرورگر می‌زند)
+webshare() {
+  if have nft; then
+    nft list table ip cryptochart >/dev/null 2>&1 || nft add table ip cryptochart 2>/dev/null || true
+    nft list chain ip cryptochart pre >/dev/null 2>&1 \
+      || nft 'add chain ip cryptochart pre { type nat hook prerouting priority -100; }' 2>/dev/null || true
+    if nft list chain ip cryptochart pre 2>/dev/null | grep -q 'redirect'; then :; else
+      nft add rule ip cryptochart pre iifname "$AP_IF" tcp dport 80 redirect to :8080 2>/dev/null || true
+    fi
+  elif have iptables; then
+    iptables -t nat -C PREROUTING -i "$AP_IF" -p tcp --dport 80 -j REDIRECT --to-ports 8080 2>/dev/null \
+      || iptables -t nat -A PREROUTING -i "$AP_IF" -p tcp --dport 80 -j REDIRECT --to-ports 8080 2>/dev/null || true
+  fi
+}
+
 ap_active() {
   nmcli -t -f NAME connection show --active 2>/dev/null | grep -qx "$AP_CON" && return 0
   ip -4 -o addr show "$AP_IF" >/dev/null 2>&1
@@ -184,6 +202,7 @@ case "$CMD" in
       fail_json "بالا آمدن هات‌اسپات ناموفق بود"
     fi
     share_internet
+    webshare
     status
     ;;
   off)
@@ -192,8 +211,9 @@ case "$CMD" in
     out_json true 0 "${SSID:-}" "" 0 "$AP_IF" "" ""
     ;;
   ensure)
-    # بوت: فقط اگر آخرین کانفیگ «روشن» بود (حتی بدون اینترنت/سرور)
-    load_state || { out_json true 0 "" "" 0 "$AP_IF" "" "no state"; exit 0; }
+    # بوت: اگر هیچ کانفیگی ذخیره نشده (نصب تازه) پیش‌فرض روشن است تا بدون
+    # هیچ شبکه‌ای هم بتوان به ماژول وصل شد؛ فقط خاموشی صریح مانع می‌شود.
+    if ! load_state; then ENABLED="true"; fi
     [ "$ENABLED" = "true" ] || { out_json true 0 "${SSID:-}" "" 0 "$AP_IF" "" "disabled"; exit 0; }
     exec bash "$0" on
     ;;

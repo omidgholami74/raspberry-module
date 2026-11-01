@@ -276,6 +276,7 @@ code{background:#0b0e12;padding:1px 5px;border-radius:5px;direction:ltr;display:
     <h2>وضعیت / Status</h2>
     <div class="row"><span>شبکهٔ وای‌فای / Wi-Fi</span><b id="wifiSsid">—</b></div>
     <div class="row"><span>IP ماژول / Module IP</span><b id="wifiIp">—</b></div>
+    <div class="row"><span>آدرس این صفحه</span><b id="pageUrl">http://10.42.0.1</b></div>
     <div class="row"><span>هات‌اسپات / Hotspot</span><b id="hsState">—</b></div>
     <div class="row"><span>SSID هات‌اسپات</span><b id="hsSsid">—</b></div>
     <div class="row"><span>آدرس هات‌اسپات</span><b id="hsIp">—</b></div>
@@ -286,6 +287,7 @@ code{background:#0b0e12;padding:1px 5px;border-radius:5px;direction:ltr;display:
 
   <div class="card">
     <h2>وای‌فای / Wi-Fi</h2>
+    <p class="muted ok" id="connNow">—</p>
     <button id="btnScan" class="primary">🔍 اسکن شبکه‌ها / Scan</button>
     <div id="nets"></div>
     <div class="field" id="connBox" hidden>
@@ -340,7 +342,13 @@ function renderStatus(s) {
   $('hsIp').textContent = h.ip || '—';
   $('hsClients').textContent = h.clients || 0;
   $('ver').textContent = s.version || '—';
+  const w = s.wifi || {};
+  $('connNow').textContent = w.connected
+    ? ('✓ وصل شده به ' + w.connected + (w.ip ? '  —  ' + w.ip : ''))
+    : 'به هیچ وای‌فایی وصل نیست — یک شبکه انتخاب کنید';
+  $('connNow').className = w.connected ? 'muted ok' : 'muted';
   if (h.ip) { $('sshHost').textContent = h.ip; }
+  if (h.ip) { $('pageUrl').textContent = 'http://' + h.ip; }
   if (h.error) { $('hsHint').textContent = h.error; $('hsHint').className = 'muted err'; }
   if (!$('hsSsidIn').value && h.ssid) $('hsSsidIn').value = h.ssid;
 }
@@ -370,12 +378,23 @@ async function loadLog() {
   const j = await api('/api/log?n=80');
   $('log').textContent = j.log || j.error || '—';
 }
-$('btnScan').onclick = async () => {
-  $('btnScan').disabled = true; $('btnScan').textContent = '… scanning';
+async function loadScan(auto) {
+  const b = $('btnScan');
+  b.disabled = true; b.textContent = '… در حال اسکن / scanning';
   const j = await api('/api/scan', {});
-  $('btnScan').disabled = false; $('btnScan').textContent = '🔍 اسکن شبکه‌ها / Scan';
-  if (j.ok) renderNets(j.scan); else $('wifiHint').textContent = j.error || 'scan failed';
-};
+  b.disabled = false; b.textContent = '🔍 اسکن شبکه‌ها / Scan';
+  if (j.ok) {
+    renderNets(j.scan);
+    const n = (j.scan || []).length;
+    $('wifiHint').textContent = n ? (n + ' شبکه پیدا شد — روی نام شبکه بزنید و رمز را وارد کنید.')
+                                  : 'شبکه‌ای پیدا نشد — دوباره اسکن کنید.';
+    $('wifiHint').className = 'muted';
+  } else {
+    $('wifiHint').textContent = j.error || 'scan failed';
+    $('wifiHint').className = 'muted err';
+  }
+}
+$('btnScan').onclick = () => loadScan(false);
 $('btnCancel').onclick = () => { $('connBox').hidden = true; };
 $('btnConnect').onclick = async () => {
   const ssid = $('connSsid').dataset.ssid;
@@ -386,7 +405,9 @@ $('btnConnect').onclick = async () => {
   $('wifiHint').textContent = j.ok ? ('✓ متصل شد — ' + (j.ip || '')) : ('✗ ' + (j.error || ''));
   $('wifiHint').className = j.ok ? 'muted ok' : 'muted err';
   $('connPass').value = '';
-  setTimeout(refresh, 2500);
+  $('connBox').hidden = true;
+  refresh();
+  if (j.ok) setTimeout(() => { loadScan(true); refresh(); }, 3000);
 };
 async function setHotspot(enabled) {
   const ssid = $('hsSsidIn').value.trim() || 'CryptoChart';
@@ -403,7 +424,7 @@ async function setHotspot(enabled) {
 $('btnHsOn').onclick = () => setHotspot(true);
 $('btnHsOff').onclick = () => setHotspot(false);
 $('btnLog').onclick = loadLog;
-refresh(); loadLog();
+refresh(); loadLog(); loadScan(true);
 setInterval(refresh, 5000);
 </script>
 </body></html>
