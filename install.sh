@@ -74,7 +74,7 @@ if [ -z "$UPDATE_ONLY" ]; then
   apt-get install -y -qq python3-pil
   # مدیریت وای‌فای از PWA (nmcli) + هات‌اسپات خود ماژول (iw + dnsmasq برای
   # ipv4.method shared). اگر نصب نشد فقط این قابلیت‌ها از کار می‌افتند، چارت مشکلی ندارد.
-  apt-get install -y -qq network-manager iw dnsmasq-base \
+  apt-get install -y -qq network-manager iw dnsmasq-base wpa_supplicant \
     || apt-get install -y -qq network-manager iw \
     || echo "    (network-manager/iw missing — PWA Wi-Fi + hotspot off, chart unaffected)"
   # فونت‌ها + shaping فارسی — در DietPi/دبیان قدیمی ممکن است بعضی بسته‌ها نباشند؛ ادامه می‌دهیم

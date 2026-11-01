@@ -27,6 +27,7 @@ STATE_FILE = os.environ.get('CRYPTOCHART_HOTSPOT_STATE') \
     or os.path.join(HERE, 'hotspot.json')
 STATUS_TTL = 10          # ثانیه — وضعیت در هر poll دوباره از nmcli پرسیده نشود
 APPLY_TIMEOUT = 70
+REAPPLY_EVERY = 60       # ثانیه — بازگردانی هات‌اسپاتِ خوابانده‌شده، ولی نه مدام
 
 _DEFAULTS = {'enabled': False, 'ssid': 'CryptoChart', 'pass': ''}
 
@@ -34,6 +35,7 @@ _last_status = {}
 _last_status_ts = 0.0
 _applied_key = None
 _last_error = ''
+_last_reapply = 0.0
 
 
 def _script():
@@ -140,19 +142,26 @@ def ensure():
 
 def apply(cfg, force=False):
     """اعمال کانفیگ سرور؛ فقط وقتی چیزی عوض شده (یا force) فرمان می‌رود."""
-    global _applied_key, _last_error
+    global _applied_key, _last_error, _last_reapply
     data = write_state(cfg)
     key = (data['enabled'], data['ssid'], data['pass'])
     if not force and key == _applied_key:
-        return True
+        # کسی بیرون از ما هات‌اسپات را خوابانده؟ (اتصال وای‌فای از صفحهٔ محلی،
+        # یا بالا نیامدن در بوت) → دوباره بالا بیاور، ولی حداکثر هر ۶۰ ثانیه.
+        if not data['enabled'] or status().get('enabled'):
+            return True
+        if time.time() - _last_reapply < REAPPLY_EVERY:
+            return True
+        _last_reapply = time.time()
     res = _call('on' if data['enabled'] else 'off')
     ok = bool(res.get('ok'))
+    _applied_key = key
     if ok:
-        _applied_key = key
         _last_error = ''
         _remember(res)
     else:
         _last_error = str(res.get('error') or '')[:160]
+        _last_reapply = time.time()
     return ok
 
 
