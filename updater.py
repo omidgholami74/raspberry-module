@@ -36,8 +36,9 @@ DEFAULT_REPO = 'https://github.com/omidgholami74/rasberypicrypto.git'
 DEFAULT_BRANCH = 'main'
 
 # فایل‌هایی که ماژول از آن‌ها ساخته می‌شود — آپدیت فقط همین‌ها را عوض می‌کند
-MODULE_FILES = ('chart.py', 'main.py', 'mini_chart.py', 'wifi.py', 'market.py',
-                'tgju.py', 'updater.py', 'install.sh', 'netfix.sh')
+MODULE_FILES = ('chart.py', 'main.py', 'mini_chart.py', 'wifi.py', 'hotspot.py',
+                'hotspot.sh', 'localui.py', 'market.py', 'tgju.py',
+                'updater.py', 'install.sh', 'netfix.sh')
 
 UA = 'CryptoChart-Pi/1.0'
 HTTP_TIMEOUT = 30

@@ -74,9 +74,12 @@ if [ -z "$UPDATE_ONLY" ]; then
   apt-get install -y -qq python3-pil
   # مدیریت وای‌فای از PWA (nmcli) + هات‌اسپات خود ماژول (iw + dnsmasq برای
   # ipv4.method shared). اگر نصب نشد فقط این قابلیت‌ها از کار می‌افتند، چارت مشکلی ندارد.
-  apt-get install -y -qq network-manager iw dnsmasq-base wpa_supplicant \
-    || apt-get install -y -qq network-manager iw \
-    || echo "    (network-manager/iw missing — PWA Wi-Fi + hotspot off, chart unaffected)"
+  # نکته: نام بسته در دبیان/رزبیان «wpasupplicant» است، نه «wpa_supplicant»;
+  # بستهٔ ناموجود هم نباید بقیهٔ نصب را متوقف کند (تک‌تک نصب می‌کنیم).
+  for pkg in network-manager iw dnsmasq-base wpasupplicant; do
+    apt-get install -y -qq "$pkg" 2>/dev/null \
+      || echo "    ($pkg نصب نشد — ادامه می‌دهیم؛ فقط Wi-Fi/هات‌اسپات آن قابلیت را ندارد)"
+  done
   # فونت‌ها + shaping فارسی — در DietPi/دبیان قدیمی ممکن است بعضی بسته‌ها نباشند؛ ادامه می‌دهیم
   apt-get install -y -qq fonts-vazirmatn fonts-noto-core fonts-dejavu-core fonts-freefont-ttf libraqm0 \
     || echo "    (some font packages missing — continuing; Persian glyphs may fall back)"

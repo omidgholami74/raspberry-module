@@ -10,6 +10,7 @@
 #     sudo bash hotspot.sh on   [--ssid NAME] [--pass PASSWORD]
 #     sudo bash hotspot.sh off
 #     sudo bash hotspot.sh ensure        # از hotspot.json آخرین کانفیگ
+#     sudo bash hotspot.sh diag          # عیب‌یابی: ابزارها/راننده/rfkill/کانال
 #
 #  صفحهٔ محلی روی پورت 8080 است؛ پورت 80 روی اینترفیس هات‌اسپات به همان
 #  ریدایرکت می‌شود، پس کلاینت فقط `http://10.42.0.1` را در مرورگر می‌زند.
@@ -133,8 +134,10 @@ profile() {
     ipv6.method ignore >/dev/null 2>&1 || return 1
   # کانال: اولویت با کانال لینک کلاینت (AP+STA روی یک رادیو باید هم‌کانال باشد)
   if [ -n "$chan" ]; then
+    # باند و کانال جدا تنظیم می‌شوند: اگر یکی رد شود، دیگری هم اجرا شود
+    nmcli connection modify "$AP_CON" 802-11-wireless.band "" >/dev/null 2>&1 || true
     nmcli connection modify "$AP_CON" 802-11-wireless.channel "$chan" \
-      802-11-wireless.band "" >/dev/null 2>&1 || true
+      >/dev/null 2>&1 || true
   elif [ -n "$band" ]; then
     nmcli connection modify "$AP_CON" 802-11-wireless.band "$band" \
       802-11-wireless.channel 0 >/dev/null 2>&1 || true
@@ -257,6 +260,26 @@ load_state() {
   return 0
 }
 
+# تصویر کامل محیط برای عیب‌یابی (ابزارهای نصب‌شده، راننده، rfkill، کانال)
+diag() {
+  local wlan ap chan drv flags rf on
+  wlan="$(wlan_if)"; ap="$(ap_if)"; chan="$(sta_channel)"
+  drv=""
+  [ -n "$wlan" ] && drv="$(basename "$(readlink -f "/sys/class/net/$wlan/device/driver" 2>/dev/null)" 2>/dev/null)"
+  flags=""
+  for t in nmcli iw rfkill nft iptables; do
+    have "$t" && flags="$flags $t"
+  done
+  rf="?"
+  if have rfkill; then
+    if rfkill list wifi 2>/dev/null | grep -q 'blocked: yes'; then rf="blocked"; else rf="ok"; fi
+  fi
+  on=0; ap_active && on=1
+  printf '{"ok":true,"mode":"diag","wlan":"%s","ap":"%s","channel":"%s","driver":"%s","tools":"%s","rfkill":"%s","enabled":%s,"ssid":"%s"}\n' \
+    "$(jesc "$wlan")" "$(jesc "$ap")" "$(jesc "$chan")" "$(jesc "$drv")" \
+    "$(jesc "${flags# }")" "$rf" "$on" "$(jesc "${SSID:-}")"
+}
+
 # ۱) با کانال لینک کلاینت  ۲) بدون قید  ۳) AP روی خود رادیو
 bring_up() {
   local wlan chan
@@ -286,7 +309,7 @@ case "$CMD" in
     load_state >/dev/null 2>&1 || true
     [ -z "${SSID:-}" ] && SSID="CryptoChart"
     have nmcli || fail_json "nmcli نیست (network-manager نصب شود)"
-    have iw || fail_json "iw نیست — روی ماژول: sudo apt install -y iw dnsmasq-base wpa_supplicant"
+    have iw || fail_json "iw نیست — روی ماژول: sudo apt install -y iw dnsmasq-base"
     have rfkill && { rfkill unblock wifi >/dev/null 2>&1 || true; }
     mode="$(bring_up)" || fail_json "هات‌اسپات بالا نیامد — لاگ: journalctl -u cryptochart -n 50"
     share_internet
@@ -309,6 +332,10 @@ case "$CMD" in
     ;;
   status)
     status
+    ;;
+  diag)
+    load_state >/dev/null 2>&1 || true
+    diag
     ;;
   *)
     fail_json "unknown command: $CMD"
