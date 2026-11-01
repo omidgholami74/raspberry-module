@@ -26,6 +26,23 @@ import urllib.request
 from chart import ChartRenderer, Screen
 from wifi import scan as wifi_scan, current as wifi_current, connect as wifi_connect, WifiReporter
 
+# هات‌اسپات خود ماژول + صفحهٔ محلی روی آن. هیچ‌کدام نباید چارت را از کار بیندازند.
+try:
+    import hotspot
+except Exception as _e:
+    hotspot = None
+    HOTSPOT_IMPORT_ERROR = f'{type(_e).__name__}: {_e}'
+else:
+    HOTSPOT_IMPORT_ERROR = ''
+
+try:
+    import localui
+except Exception as _e:
+    localui = None
+    LOCAL_UI_IMPORT_ERROR = f'{type(_e).__name__}: {_e}'
+else:
+    LOCAL_UI_IMPORT_ERROR = ''
+
 # فایل بازار/آپدیت نیمه‌آپدیت یا خراب نباید کل ماژول را از کار بیندازد
 # (قبلاً اگر tgju.py یا market.py سر جایش نبود، سرویس بالا نمی‌آمد و صفحه سیاه
 # می‌ماند). حالا بدونه آن‌ها هم چارت با دادهٔ سرور بالا می‌آید.
@@ -52,6 +69,7 @@ POLL_WAIT = 45          # سرور تا ۱۵ ثانیه نگه می‌دارد +
 RETRY_BASE = 2          # خطاهای کوتاه سریع جبران شوند (چارت روی صفحه می‌ماند)
 RETRY_MAX = 15
 PANE_BUDGET = 12        # سقف زمان فچ پنل‌های چندچارت در هر سیکل (ثانیه)
+LOCAL_UI_PORT = 8080    # صفحهٔ محلی روی هات‌اسپات (http://10.42.0.1:8080)
 
 
 def log(msg):
@@ -122,6 +140,31 @@ def validate_config(cfg):
     return True
 
 
+def hotspot_summary():
+    """وضعیت هات‌اسپات برای گزارش به سرور/وب‌اپ (خطا هرگز بالا نمی‌آید)."""
+    if not hotspot:
+        return {}
+    try:
+        return hotspot.summary()
+    except Exception:
+        return {}
+
+
+def apply_hotspot(cfg, state):
+    """اعمال کانفیگ هات‌اسپات سرور ({'enabled','ssid','pass'}) — فقط روی تغییر.
+    آینهٔ وضعیت در state['hotspot'] می‌نشیند تا صفحهٔ محلی آن را نشان دهد."""
+    if not hotspot:
+        return
+    try:
+        if isinstance(cfg, dict) and cfg:
+            ok = hotspot.apply(cfg)
+            if not ok:
+                log(f'hotspot apply failed: {hotspot_summary().get("error", "")}')
+        state['hotspot'] = hotspot_summary()
+    except Exception as e:
+        log(f'hotspot error: {e}')
+
+
 def handle_wifi_cmd(cmd, reporter):
     """اجرای فرمان وای‌فای دریافتی از سرور و گزارش نتیجه."""
     action = cmd.get('cmd')
@@ -129,7 +172,8 @@ def handle_wifi_cmd(cmd, reporter):
     if action == 'scan':
         nets = wifi_scan()
         ssid, ip = wifi_current()
-        reporter.report(scan=nets, status='scanned', connected=ssid, ip=ip)
+        reporter.report(scan=nets, status='scanned', connected=ssid, ip=ip,
+                        hotspot=hotspot_summary())
         log(f'wifi scan: {len(nets)} networks')
     elif action == 'connect':
         ssid = str(cmd.get('ssid', ''))
@@ -137,7 +181,8 @@ def handle_wifi_cmd(cmd, reporter):
         log(f'wifi connect {ssid}: {"ok" if ok else info}')
         reporter.report(status='connected' if ok else 'error',
                         connected=ssid if ok else '', ip=info if ok else '',
-                        error='' if ok else info)
+                        error='' if ok else info,
+                        hotspot=hotspot_summary())
 
 
 NET_ERRORS = (urllib.error.URLError, OSError, TimeoutError, ConnectionError)
@@ -281,6 +326,31 @@ def main():
 
     wait_for_network()
 
+    # ---------- هات‌اسپات + صفحهٔ محلی ----------
+    # اول از کانفیگ ذخیره‌شدهٔ قبلی بالا می‌آید (حتی بدون اینترنت/سرور)، تا
+    # همان موقع که ماژول به وای‌فای وصل نیست هم بتوان به آن وصل شد و
+    # وای‌فای تازه داد. خطا فقط لاگ می‌شود؛ چارت دست‌نخورده ادامه می‌دهد.
+    hs_state = {'hotspot': {}, 'version': '', 'started': time.time()}
+    if HOTSPOT_IMPORT_ERROR:
+        log(f'hotspot load failed — off: {HOTSPOT_IMPORT_ERROR}')
+    if hotspot:
+        try:
+            st = hotspot.ensure()
+            log(f'hotspot: enabled={int(bool(st.get("enabled")))} '
+                f'ssid={st.get("ssid") or "-"} ip={st.get("ip") or "-"}')
+        except Exception as e:
+            log(f'hotspot ensure failed: {e}')
+    hs_state['hotspot'] = hotspot_summary()
+    if LOCAL_UI_IMPORT_ERROR:
+        log(f'local ui load failed — off: {LOCAL_UI_IMPORT_ERROR}')
+    if localui:
+        try:
+            localui.start(port=LOCAL_UI_PORT, state=hs_state)
+            log(f'local ui: http://{hs_state["hotspot"].get("ip") or "10.42.0.1"}'
+                f':{LOCAL_UI_PORT}')
+        except Exception as e:
+            log(f'local ui off: {e}')
+
     # سلام اولیه — نمایش وضعیت سرور روی اسپلش
     try:
         h = api.health()
@@ -317,6 +387,10 @@ def main():
             # ---- منبع هر بخش از کانفیگ سرور ----
             # {'crypto': 'nobitex', 'iran': 'tgju'} — تا PWA بتواند عوضش کند.
             market.set_sources(data.get('sources') or {})
+
+            # ---- هات‌اسپات: SSID/رمز/روشن-خاموش از وب‌اپ (api=config) ----
+            apply_hotspot(data.get('hotspot'), hs_state)
+            hs_state['version'] = str(cfg.get('moduleRev') or hs_state.get('version') or '')
 
             # ---- دادهٔ بازار: کاملاً مستقیم از ماژول ----
             # کریپتو → نوبیتکس | بازار ایران → tgju (یا BrsApi اگر انتخاب شده)؛

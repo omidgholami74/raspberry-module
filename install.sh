@@ -72,9 +72,11 @@ if [ -z "$UPDATE_ONLY" ]; then
   apt-get update -qq
   # حیاتی: Pillow — اگر python3 نبود، خودش به‌عنوان وابستگی نصب می‌شود (DietPi معمولاً python3 ندارد)
   apt-get install -y -qq python3-pil
-  # مدیریت وای‌فای از PWA (nmcli) — اگر نصب نشد فقط این قابلیت از کار می‌افتد، چارت مشکلی ندارد
-  apt-get install -y -qq network-manager \
-    || echo "    (network-manager missing — PWA Wi-Fi feature off, chart unaffected)"
+  # مدیریت وای‌فای از PWA (nmcli) + هات‌اسپات خود ماژول (iw + dnsmasq برای
+  # ipv4.method shared). اگر نصب نشد فقط این قابلیت‌ها از کار می‌افتند، چارت مشکلی ندارد.
+  apt-get install -y -qq network-manager iw dnsmasq-base \
+    || apt-get install -y -qq network-manager iw \
+    || echo "    (network-manager/iw missing — PWA Wi-Fi + hotspot off, chart unaffected)"
   # فونت‌ها + shaping فارسی — در DietPi/دبیان قدیمی ممکن است بعضی بسته‌ها نباشند؛ ادامه می‌دهیم
   apt-get install -y -qq fonts-vazirmatn fonts-noto-core fonts-dejavu-core fonts-freefont-ttf libraqm0 \
     || echo "    (some font packages missing — continuing; Persian glyphs may fall back)"
@@ -84,7 +86,7 @@ echo "==> copying files to $INSTALL_DIR ..."
 mkdir -p "$INSTALL_DIR"
 # حیاتی: updater.py و install.sh هم کپی می‌شوند — آپدیت آنلاین ماژول
 # (check/install از وب‌اپ) بدون آن‌ها کار نمی‌کند
-MODULE_FILES="chart.py main.py mini_chart.py wifi.py market.py tgju.py updater.py install.sh"
+MODULE_FILES="chart.py main.py mini_chart.py wifi.py hotspot.py hotspot.sh localui.py market.py tgju.py updater.py install.sh"
 for f in $MODULE_FILES; do
   if [ ! -f "$SRC_DIR/$f" ]; then
     echo "ERROR: $f در پوشهٔ ماژول نیست ($SRC_DIR) — نصب متوقف شد" >&2
@@ -117,8 +119,8 @@ if command -v python3 >/dev/null 2>&1; then
   if ! python3 - "$INSTALL_DIR" <<'PYCHK'
 import os, sys
 bad = []
-for name in ('chart.py', 'main.py', 'mini_chart.py', 'wifi.py',
-             'market.py', 'tgju.py', 'updater.py'):
+for name in ('chart.py', 'main.py', 'mini_chart.py', 'wifi.py', 'hotspot.py',
+             'localui.py', 'market.py', 'tgju.py', 'updater.py'):
     p = os.path.join(sys.argv[1], name)
     try:
         with open(p, 'rb') as fh:
@@ -140,6 +142,7 @@ rm -rf "$BACKUP_DIR"
 cp "$SRC_DIR/netfix.sh" "$INSTALL_DIR/" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/main.py" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/netfix.sh" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/hotspot.sh" 2>/dev/null || true
 
 # --- نسخهٔ نصب‌شده ----------------------------------------------------------
 # منبع git_rev() در نصب کپی‌شده همین فایل است و وب‌اپ آن را «Module version»
@@ -183,6 +186,8 @@ if [ "$(id -u)" = "0" ]; then
     cat > "$SUDOERS" <<EOF
 # CryptoChart — آپدیت آنلاین ماژول (فقط همین یک فرمان، بدون رمز)
 ${RUN_USER} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/install.sh --update
+# هات‌اسپات ماژول (ساخت اینترفیس ap0 + پروفایل NetworkManager) — فقط اسکریپت خودمان
+${RUN_USER} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/hotspot.sh
 EOF
     if visudo -c -f "$SUDOERS" >/dev/null 2>&1; then
       chmod 440 "$SUDOERS"

@@ -91,7 +91,7 @@ class WifiReporter:
     def __init__(self, base_url):
         self.base = base_url.rstrip('/')
 
-    def report(self, scan=None, status='', connected='', ip='', error=''):
+    def report(self, scan=None, status='', connected='', ip='', error='', hotspot=None):
         body = json.dumps({
             'action': 'report',
             'scan': scan,
@@ -99,6 +99,7 @@ class WifiReporter:
             'connected': connected,
             'ip': ip,
             'error': error[:200],
+            'hotspot': hotspot or {},
         }).encode('utf-8')
         req = urllib.request.Request(
             f'{self.base}/index.php?api=wifi', data=body, method='POST',
